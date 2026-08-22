@@ -1,0 +1,422 @@
+from __future__ import annotations
+
+import re
+import shutil
+import zipfile
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+import yaml
+
+from vision_trainer.yolo.models import DatasetInfo, SplitInfo
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+SPLIT_KEYS = ("train", "val", "test")
+
+
+class ZipExtractionError(Exception):
+    """Raised when a ZIP archive fails security validation before extraction."""
+
+
+def find_data_yaml(root: Path) -> Path | None:
+    """Return the first data.yaml found at root or one level below."""
+    direct = root / "data.yaml"
+    if direct.is_file():
+        return direct
+
+    for child in sorted(root.iterdir()):
+        if child.is_dir():
+            candidate = child / "data.yaml"
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def extract_zip_dataset(zip_path: Path, destination: Path) -> Path:
+    """Extract a YOLO dataset ZIP after validating every archive member."""
+    destination.mkdir(parents=True, exist_ok=True)
+    destination_resolved = destination.resolve()
+
+    try:
+        archive = zipfile.ZipFile(zip_path, "r")
+    except zipfile.BadZipFile as exc:
+        raise ZipExtractionError("Archive ZIP invalide.") from exc
+
+    with archive:
+        planned_extractions: list[tuple[zipfile.ZipInfo, Path]] = []
+        for member in archive.infolist():
+            target = _validate_zip_member(member, destination_resolved)
+            planned_extractions.append((member, target))
+
+        for member, target in planned_extractions:
+            _extract_zip_member(archive, member, target)
+
+    return destination
+
+
+def _validate_zip_member(member: zipfile.ZipInfo, destination_resolved: Path) -> Path:
+    member_name = member.filename
+
+    if not member_name or member_name.startswith(("/", "\\")):
+        raise ZipExtractionError(f"Chemin absolu non autorisé dans l'archive : {member_name!r}.")
+
+    if re.match(r"^[A-Za-z]:[/\\]", member_name):
+        raise ZipExtractionError(f"Chemin absolu non autorisé dans l'archive : {member_name!r}.")
+
+    pure_path = PurePosixPath(member_name)
+    if pure_path.is_absolute():
+        raise ZipExtractionError(f"Chemin absolu non autorisé dans l'archive : {member_name!r}.")
+
+    if ".." in pure_path.parts:
+        raise ZipExtractionError(f"Traversée de répertoire non autorisée : {member_name!r}.")
+
+    is_symlink = ((member.external_attr >> 16) & 0o170000) == 0o120000
+    if is_symlink:
+        raise ZipExtractionError(f"Lien symbolique non autorisé : {member_name!r}.")
+
+    target = (destination_resolved / Path(*pure_path.parts)).resolve()
+    try:
+        target.relative_to(destination_resolved)
+    except ValueError as exc:
+        raise ZipExtractionError(
+            f"Destination hors du dossier cible : {member_name!r}."
+        ) from exc
+
+    return target
+
+
+def _extract_zip_member(
+    archive: zipfile.ZipFile,
+    member: zipfile.ZipInfo,
+    target: Path,
+) -> None:
+    if member.is_dir() or member.filename.endswith("/"):
+        target.mkdir(parents=True, exist_ok=True)
+        return
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with archive.open(member) as source, target.open("wb") as destination:
+        shutil.copyfileobj(source, destination)
+
+
+def load_dataset_from_directory(root: Path) -> tuple[DatasetInfo | None, list[str]]:
+    """
+    Parse data.yaml and build dataset metadata.
+
+    Returns (dataset_info, parse_errors). parse_errors are human-readable strings
+    for issues that prevent building DatasetInfo.
+    """
+    yaml_path = find_data_yaml(root)
+    if yaml_path is None:
+        return None, ["data.yaml introuvable dans le dataset."]
+
+    try:
+        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        return None, [f"data.yaml illisible : {exc}"]
+
+    if not isinstance(raw, dict):
+        return None, ["data.yaml doit contenir un mapping YAML."]
+
+    errors: list[str] = []
+    class_names = _parse_class_names(raw.get("names"), errors)
+    if class_names is None:
+        return None, errors
+
+    dataset_root = _resolve_dataset_root(yaml_path, raw.get("path"))
+    yaml_dir = yaml_path.parent.resolve()
+    if not _path_is_applicable(dataset_root, raw, yaml_dir):
+        dataset_root = yaml_dir
+    splits = _parse_splits(raw, dataset_root, yaml_dir, errors)
+
+    if errors:
+        return None, errors
+
+    info = DatasetInfo(
+        root=dataset_root,
+        yaml_path=yaml_path,
+        class_names=class_names,
+        splits=splits,
+    )
+    return info, []
+
+
+def _parse_class_names(names_raw: Any, errors: list[str]) -> dict[int, str] | None:
+    if names_raw is None:
+        errors.append("Le champ 'names' est absent de data.yaml.")
+        return None
+
+    if isinstance(names_raw, dict):
+        return _parse_class_names_dict(names_raw, errors)
+
+    if isinstance(names_raw, list):
+        return _parse_class_names_list(names_raw, errors)
+
+    errors.append("'names' doit être une liste ou un dictionnaire.")
+    return None
+
+
+def _parse_class_names_dict(names_raw: dict[Any, Any], errors: list[str]) -> dict[int, str] | None:
+    if not names_raw:
+        errors.append("Le champ 'names' est vide.")
+        return None
+
+    parsed: dict[int, str] = {}
+    invalid = False
+
+    for key, value in names_raw.items():
+        try:
+            class_id = int(key)
+        except (TypeError, ValueError):
+            errors.append(f"Identifiant de classe invalide dans names : {key!r}.")
+            invalid = True
+            continue
+
+        if class_id < 0:
+            errors.append(f"Identifiant de classe négatif dans names : {class_id}.")
+            invalid = True
+            continue
+
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"Nom de classe invalide pour l'id {class_id}.")
+            invalid = True
+            continue
+
+        parsed[class_id] = value.strip()
+
+    if invalid:
+        return None
+
+    expected_keys = list(range(len(parsed)))
+    actual_keys = sorted(parsed.keys())
+    if actual_keys != expected_keys:
+        errors.append("Les indices de 'names' doivent être contigus à partir de 0.")
+        return None
+
+    return parsed
+
+
+def _parse_class_names_list(names_raw: list[Any], errors: list[str]) -> dict[int, str] | None:
+    if not names_raw:
+        errors.append("Le champ 'names' est vide.")
+        return None
+
+    parsed: dict[int, str] = {}
+    invalid = False
+
+    for index, name in enumerate(names_raw):
+        if not isinstance(name, str):
+            errors.append(
+                f"Entrée names[{index}] invalide : doit être une chaîne, reçu {type(name).__name__}."
+            )
+            invalid = True
+            continue
+        if not name.strip():
+            errors.append(f"Entrée names[{index}] vide.")
+            invalid = True
+            continue
+        parsed[index] = name.strip()
+
+    if invalid:
+        return None
+
+    return parsed
+
+
+def _resolve_dataset_root(yaml_path: Path, path_value: Any) -> Path:
+    """
+    Resolve the dataset root for relative split paths.
+
+    Relative ``path:`` values are always anchored to the directory that contains
+    data.yaml — never to the process CWD or the temporary import parent folder.
+    Absolute or relative ``path:`` values are used only when applicable (the
+    directory exists and can locate at least one declared relative split).
+    Otherwise the directory containing data.yaml is used.
+    """
+    yaml_dir = yaml_path.parent.resolve()
+    if not isinstance(path_value, str) or not path_value.strip():
+        return yaml_dir
+
+    candidate = Path(path_value.strip())
+    if candidate.is_absolute():
+        resolved = candidate
+    else:
+        resolved = (yaml_dir / candidate).resolve()
+
+    return resolved
+
+
+def _path_is_applicable(
+    dataset_root: Path,
+    raw: dict[str, Any],
+    yaml_dir: Path,
+) -> bool:
+    """Return True when ``path:`` is a usable base for relative split paths."""
+    if dataset_root == yaml_dir:
+        return True
+    if not dataset_root.is_dir():
+        return False
+
+    relative_splits = [
+        Path(value.strip())
+        for key in SPLIT_KEYS
+        for value in [raw.get(key)]
+        if isinstance(value, str) and value.strip() and not Path(value.strip()).is_absolute()
+    ]
+    if not relative_splits:
+        return True
+
+    return any((dataset_root / split_ref).exists() for split_ref in relative_splits)
+
+
+def _parse_splits(
+    raw: dict[str, Any],
+    dataset_root: Path,
+    yaml_dir: Path,
+    errors: list[str],
+) -> dict[str, SplitInfo]:
+    splits: dict[str, SplitInfo] = {}
+    yaml_dir = yaml_dir.resolve()
+    split_base = dataset_root if _path_is_applicable(dataset_root, raw, yaml_dir) else yaml_dir
+
+    for split_name in SPLIT_KEYS:
+        split_ref = raw.get(split_name)
+        if split_ref is None:
+            continue
+
+        if not isinstance(split_ref, str):
+            errors.append(
+                f"Le split '{split_name}' doit être une chaîne de chemin de dossier, "
+                f"reçu : {type(split_ref).__name__}."
+            )
+            continue
+
+        if not split_ref.strip():
+            errors.append(f"Le split '{split_name}' est présent mais vide.")
+            continue
+
+        declared = split_ref.strip()
+        images_dir, used_fallback, fallback_ref = _resolve_split_path_tolerant(
+            declared,
+            split_base=split_base,
+            extracted_root=yaml_dir,
+        )
+        labels_dir = _infer_labels_dir(images_dir)
+        splits[split_name] = SplitInfo(
+            name=split_name,
+            images_dir=images_dir,
+            labels_dir=labels_dir,
+            declared_ref=declared,
+            resolved_via_fallback=used_fallback,
+            fallback_ref=fallback_ref,
+        )
+
+    return splits
+
+
+def _resolve_split_path(split_ref: str, dataset_root: Path) -> Path:
+    """Resolve a split path against the dataset root (yaml ``path:`` or yaml dir)."""
+    candidate = Path(split_ref)
+    if candidate.is_absolute():
+        return candidate
+    return (dataset_root / candidate).resolve()
+
+
+def _leading_parent_stripped_ref(split_ref: str) -> str | None:
+    """Strip only leading ``..`` components from a relative split path."""
+    candidate = Path(split_ref)
+    if candidate.is_absolute():
+        return None
+
+    parts = candidate.parts
+    index = 0
+    while index < len(parts) and parts[index] == "..":
+        index += 1
+
+    if index == 0:
+        return None
+    if index >= len(parts):
+        return None
+
+    return str(Path(*parts[index:]))
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_split_path_tolerant(
+    split_ref: str,
+    *,
+    split_base: Path,
+    extracted_root: Path,
+) -> tuple[Path, bool, str | None]:
+    """
+    Resolve a split path, with a contained fallback when leading ``../`` miss.
+
+    Returns (resolved_path, used_fallback, fallback_ref).
+    """
+    declared_path = _resolve_split_path(split_ref, split_base)
+    if declared_path.exists():
+        return declared_path, False, None
+
+    stripped = _leading_parent_stripped_ref(split_ref)
+    if stripped is None:
+        return declared_path, False, None
+
+    fallback_path = (extracted_root / stripped).resolve()
+    if not _is_within_root(fallback_path, extracted_root):
+        return declared_path, False, None
+    if not fallback_path.exists():
+        return declared_path, False, None
+
+    return fallback_path, True, stripped
+
+
+def _infer_labels_dir(images_dir: Path) -> Path | None:
+    parts = list(images_dir.parts)
+    if "images" in parts:
+        labels_parts = ["labels" if part == "images" else part for part in parts]
+        return Path(*labels_parts)
+    sibling = images_dir.parent / "labels" / images_dir.name
+    return sibling
+
+
+def list_images(directory: Path | None) -> list[Path]:
+    if directory is None or not directory.is_dir():
+        return []
+    return sorted(
+        path
+        for path in directory.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
+def relative_path_without_extension(path: Path, base_dir: Path) -> str:
+    return str(path.relative_to(base_dir).with_suffix(""))
+
+
+def label_path_for_image(
+    image_path: Path,
+    images_dir: Path,
+    labels_dir: Path,
+) -> Path:
+    relative = relative_path_without_extension(image_path, images_dir)
+    return labels_dir / f"{relative}.txt"
+
+
+def image_path_for_label(
+    label_path: Path,
+    labels_dir: Path,
+    images_dir: Path,
+) -> Path | None:
+    relative = relative_path_without_extension(label_path, labels_dir)
+    for extension in IMAGE_EXTENSIONS:
+        candidate = images_dir / f"{relative}{extension}"
+        if candidate.is_file():
+            return candidate
+    return images_dir / f"{relative}.jpg"

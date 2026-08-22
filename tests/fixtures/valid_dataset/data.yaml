@@ -1,0 +1,6 @@
+names:
+  0: cat
+  1: dog
+path: /home/pi/vision-trainer/tests/fixtures/valid_dataset
+train: train/images
+val: val/images
