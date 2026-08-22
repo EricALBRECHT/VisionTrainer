@@ -11,6 +11,7 @@ st.markdown(
     """
     Application locale pour préparer et entraîner des modèles de détection d'objets.
 
-    Utilisez la page **Dataset** pour charger et valider un dataset YOLO.
+    1. Page **Dataset** — chargez et validez un dataset YOLO (ZIP).
+    2. Page **Entraînement** — lancez un entraînement Ultralytics YOLO11.
     """
 )

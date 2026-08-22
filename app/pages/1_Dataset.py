@@ -11,6 +11,7 @@ import streamlit as st
 from vision_trainer.yolo.parser import ZipExtractionError, extract_zip_dataset
 from vision_trainer.yolo.validator import validate_dataset
 from vision_trainer.yolo.visualization import ImagePreviewError, collect_sample_images, draw_annotations
+from vision_trainer.training.session_dataset import SESSION_DATASET_KEY, dataset_to_session_payload
 
 st.set_page_config(page_title="Dataset — Vision Trainer", layout="wide")
 st.title("Dataset YOLO")
@@ -33,6 +34,7 @@ if st.session_state.get("dataset_upload_hash") != upload_hash:
         st.session_state.pop("dataset_temp_dir", None)
         st.session_state.pop("dataset_extract_dir", None)
         st.session_state.pop("dataset_upload_hash", None)
+        st.session_state.pop(SESSION_DATASET_KEY, None)
 
     temp_root = Path(tempfile.mkdtemp(prefix="vision-trainer-dataset-"))
     zip_path = temp_root / "dataset.zip"
@@ -121,8 +123,10 @@ if infos:
 
 if result.is_valid:
     st.success("Le dataset est valide.")
+    st.session_state[SESSION_DATASET_KEY] = dataset_to_session_payload(dataset, extract_dir)
 else:
     st.error("Le dataset contient des erreurs bloquantes.")
+    st.session_state.pop(SESSION_DATASET_KEY, None)
 
 preview_split = st.selectbox(
     "Split à prévisualiser",
