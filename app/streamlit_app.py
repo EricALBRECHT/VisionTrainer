@@ -13,5 +13,6 @@ st.markdown(
 
     1. Page **Dataset** — chargez et validez un dataset YOLO (ZIP).
     2. Page **Entraînement** — lancez un entraînement Ultralytics YOLO11.
+    3. Page **Inférence** — testez un modèle (`best.pt`) sur une image.
     """
 )
