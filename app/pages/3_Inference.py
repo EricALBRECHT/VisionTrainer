@@ -18,6 +18,7 @@ from vision_trainer.inference.render import (
     build_download_filename,
     draw_detections,
 )
+from vision_trainer.results.models import SESSION_INFERENCE_WEIGHTS_KEY
 from vision_trainer.training.device import describe_device, is_cuda_available, resolve_device
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 
@@ -34,7 +35,15 @@ if not models:
     st.stop()
 
 model_labels = [model.label for model in models]
-selected_label = st.selectbox("Modèle", options=model_labels)
+preferred_weights = st.session_state.get(SESSION_INFERENCE_WEIGHTS_KEY)
+default_index = 0
+if preferred_weights:
+    for index, model in enumerate(models):
+        if Path(model.weights_path).resolve() == Path(preferred_weights).resolve():
+            default_index = index
+            break
+
+selected_label = st.selectbox("Modèle", options=model_labels, index=default_index)
 selected_model = next(model for model in models if model.label == selected_label)
 st.caption(f"Poids : `{selected_model.weights_path}`")
 
