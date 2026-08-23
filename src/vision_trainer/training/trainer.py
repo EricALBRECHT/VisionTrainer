@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from vision_trainer.training.data_yaml import write_resolved_data_yaml
 from vision_trainer.training.device import DeviceChoice, DeviceError, describe_device, resolve_device
-from vision_trainer.training.runs import create_run_directory
+from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR, create_run_directory
+from vision_trainer.training.status import (
+    RunStatus,
+    compute_progress_percent,
+    extract_metrics_from_trainer,
+    find_active_run,
+    read_request,
+    read_status,
+    reconcile_run_status,
+    request_path,
+    utc_now_iso,
+    write_request,
+    write_status,
+)
 from vision_trainer.yolo.models import DatasetInfo
 
 AVAILABLE_MODELS: dict[str, str] = {
@@ -20,6 +34,8 @@ DEFAULT_EPOCHS = 3
 DEFAULT_IMGSZ = 640
 IMGSZ_CHOICES = (320, 480, 640)
 BATCH_AUTO = -1
+
+SESSION_ACTIVE_RUN_KEY = "active_training_run_dir"
 
 
 class TrainingError(Exception):
@@ -35,6 +51,17 @@ class TrainingRequest:
     batch: int = BATCH_AUTO
     device_choice: DeviceChoice | str = "auto"
     runs_root: Path | None = None
+
+
+@dataclass(frozen=True)
+class PreparedRun:
+    run_id: str
+    run_dir: Path
+    resolved_data_yaml: Path
+    status: RunStatus
+    device: str
+    device_label: str
+    weights_name: str
 
 
 @dataclass(frozen=True)
@@ -68,14 +95,16 @@ def build_train_kwargs(
     if imgsz not in IMGSZ_CHOICES:
         raise TrainingError(f"imgsz invalide : {imgsz}. Choix autorisés : {IMGSZ_CHOICES}.")
 
+    # Absolute project/name avoids Ultralytics nesting under runs/detect/...
+    run_dir_abs = run_dir.resolve()
     return {
-        "data": str(data_yaml),
+        "data": str(Path(data_yaml).resolve()),
         "epochs": int(epochs),
         "imgsz": int(imgsz),
         "batch": int(batch),
         "device": device,
-        "project": str(run_dir.parent),
-        "name": run_dir.name,
+        "project": str(run_dir_abs.parent),
+        "name": run_dir_abs.name,
         "exist_ok": True,
         "plots": True,
         "verbose": True,
@@ -83,23 +112,17 @@ def build_train_kwargs(
 
 
 def find_best_weights(run_dir: Path) -> Path | None:
-    """Return ``weights/best.pt`` under the run directory when present."""
     candidate = run_dir / "weights" / "best.pt"
-    if candidate.is_file():
-        return candidate
-    return None
+    return candidate if candidate.is_file() else None
 
 
-def run_training(
-    request: TrainingRequest,
-    *,
-    yolo_factory: Callable[[str], Any] | None = None,
-) -> TrainingResult:
-    """
-    Prepare artifacts and run Ultralytics training synchronously.
+def find_last_weights(run_dir: Path) -> Path | None:
+    candidate = run_dir / "weights" / "last.pt"
+    return candidate if candidate.is_file() else None
 
-    ``yolo_factory`` may be injected in tests to avoid loading real weights.
-    """
+
+def prepare_training_run(request: TrainingRequest) -> PreparedRun:
+    """Create run directory, resolved YAML, status.json and request.json (no training yet)."""
     if "train" not in request.dataset.splits:
         raise TrainingError("Le dataset ne contient pas de split 'train' valide.")
 
@@ -115,45 +138,257 @@ def run_training(
     except DeviceError as exc:
         raise TrainingError(str(exc)) from exc
 
-    run_id, run_dir = create_run_directory(runs_root=request.runs_root)
+    runs_root = request.runs_root if request.runs_root is not None else ARTIFACTS_RUNS_DIR
+    active = find_active_run(runs_root)
+    if active is not None:
+        raise TrainingError(
+            f"Un entraînement est déjà en cours ({active.name}). "
+            "Attendez la fin avant d'en lancer un autre."
+        )
+
+    run_id, run_dir = create_run_directory(runs_root=runs_root)
     resolved_yaml = write_resolved_data_yaml(request.dataset, run_dir)
 
-    train_kwargs = build_train_kwargs(
-        data_yaml=resolved_yaml,
-        run_dir=run_dir,
-        epochs=request.epochs,
-        imgsz=request.imgsz,
-        batch=request.batch,
+    status = RunStatus(
+        run_id=run_id,
+        state="created",
+        model=request.model_key,
+        epochs_total=int(request.epochs),
+        epoch_current=0,
+        imgsz=int(request.imgsz),
+        batch=int(request.batch),
         device=device,
+        progress_percent=0.0,
+    )
+    write_status(run_dir, status)
+
+    write_request(
+        run_dir,
+        {
+            "run_id": run_id,
+            "model_key": request.model_key,
+            "weights_name": weights_name,
+            "epochs": int(request.epochs),
+            "imgsz": int(request.imgsz),
+            "batch": int(request.batch),
+            "device": device,
+            "data_yaml": str(resolved_yaml.resolve()),
+            "run_dir": str(run_dir.resolve()),
+        },
+    )
+
+    return PreparedRun(
+        run_id=run_id,
+        run_dir=run_dir.resolve(),
+        resolved_data_yaml=resolved_yaml.resolve(),
+        status=status,
+        device=device,
+        device_label=describe_device(device),
+        weights_name=weights_name,
+    )
+
+
+def start_training_subprocess(run_dir: Path, *, python_executable: str | None = None) -> int:
+    """
+    Launch the training worker in a dedicated subprocess and return immediately.
+
+    Returns the worker PID.
+    """
+    import subprocess
+
+    run_dir = run_dir.resolve()
+    status = read_status(run_dir)
+    if status is None:
+        raise TrainingError(f"status.json introuvable dans {run_dir}")
+    if not request_path(run_dir).is_file():
+        raise TrainingError(f"request.json introuvable dans {run_dir}")
+
+    active = find_active_run(run_dir.parent)
+    if active is not None and active.resolve() != run_dir:
+        raise TrainingError(f"Un autre entraînement est déjà en cours ({active.name}).")
+
+    python = python_executable or sys.executable
+    log_file = run_dir / "train.log"
+    log_handle = log_file.open("a", encoding="utf-8")
+
+    try:
+        process = subprocess.Popen(
+            [python, "-m", "vision_trainer.training.worker", "--run-dir", str(run_dir)],
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            cwd=str(Path.cwd()),
+            start_new_session=True,
+        )
+    finally:
+        log_handle.close()
+
+    status.state = "running"
+    status.pid = process.pid
+    status.started_at = status.started_at or utc_now_iso()
+    status.error_message = None
+    write_status(run_dir, status)
+    return process.pid
+
+
+def execute_training_from_run_dir(
+    run_dir: Path,
+    *,
+    yolo_factory: Callable[[str], Any] | None = None,
+) -> RunStatus:
+    """
+    Execute training for an already prepared run directory (used by the worker).
+    """
+    run_dir = run_dir.resolve()
+    status = read_status(run_dir)
+    if status is None:
+        raise TrainingError(f"status.json introuvable dans {run_dir}")
+    request = read_request(run_dir)
+
+    status.state = "running"
+    status.pid = status.pid or os_getpid()
+    status.started_at = status.started_at or utc_now_iso()
+    status.epoch_current = 0
+    status.progress_percent = 0.0
+    status.error_message = None
+    write_status(run_dir, status)
+
+    weights_name = str(request["weights_name"])
+    train_kwargs = build_train_kwargs(
+        data_yaml=Path(request["data_yaml"]),
+        run_dir=run_dir,
+        epochs=int(request["epochs"]),
+        imgsz=int(request["imgsz"]),
+        batch=int(request["batch"]),
+        device=str(request["device"]),
     )
 
     factory = yolo_factory or _default_yolo_factory
     try:
         model = factory(weights_name)
     except TrainingError:
+        _mark_failed(run_dir, status, "Impossible de charger le modèle.")
         raise
-    except Exception as exc:  # noqa: BLE001 - surface as user-facing training error
-        raise TrainingError(f"Impossible de charger le modèle {weights_name} : {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        message = f"Impossible de charger le modèle {weights_name} : {exc}"
+        _mark_failed(run_dir, status, message)
+        raise TrainingError(message) from exc
+
+    callbacks = _build_progress_callbacks(run_dir)
+    for event, callback in callbacks.items():
+        try:
+            model.add_callback(event, callback)
+        except Exception:  # noqa: BLE001 - some mocks may not support callbacks
+            pass
 
     try:
         model.train(**train_kwargs)
     except Exception as exc:  # noqa: BLE001
-        raise TrainingError(f"Erreur pendant l'entraînement : {exc}") from exc
+        message = f"Erreur pendant l'entraînement : {exc}"
+        _mark_failed(run_dir, status, message)
+        raise TrainingError(message) from exc
 
+    status = read_status(run_dir) or status
+    status.state = "completed"
+    status.finished_at = utc_now_iso()
+    status.epoch_current = status.epochs_total
+    status.progress_percent = 100.0
+    best = find_best_weights(run_dir)
+    last = find_last_weights(run_dir)
+    status.best_model_path = str(best) if best else None
+    status.last_model_path = str(last) if last else None
+    status.error_message = None
+    write_status(run_dir, status)
+    return status
+
+
+def run_training(
+    request: TrainingRequest,
+    *,
+    yolo_factory: Callable[[str], Any] | None = None,
+) -> TrainingResult:
+    """
+    Synchronous helper used by unit tests: prepare + execute in-process.
+    Production UI uses prepare_training_run + start_training_subprocess instead.
+    """
+    prepared = prepare_training_run(request)
+    final_status = execute_training_from_run_dir(prepared.run_dir, yolo_factory=yolo_factory)
     return TrainingResult(
-        run_id=run_id,
-        run_dir=run_dir,
-        resolved_data_yaml=resolved_yaml,
+        run_id=prepared.run_id,
+        run_dir=prepared.run_dir,
+        resolved_data_yaml=prepared.resolved_data_yaml,
         model_key=request.model_key,
-        weights_name=weights_name,
+        weights_name=prepared.weights_name,
         epochs=request.epochs,
         imgsz=request.imgsz,
         batch=request.batch,
-        device=device,
-        device_label=describe_device(device),
-        best_weights=find_best_weights(run_dir),
-        status="completed",
+        device=prepared.device,
+        device_label=prepared.device_label,
+        best_weights=find_best_weights(prepared.run_dir),
+        status=final_status.state,
     )
+
+
+def load_run_for_ui(run_dir: Path) -> RunStatus | None:
+    """Reconcile and return status for Streamlit display."""
+    return reconcile_run_status(run_dir)
+
+
+def os_getpid() -> int:
+    import os
+
+    return os.getpid()
+
+
+def _mark_failed(run_dir: Path, status: RunStatus, message: str) -> None:
+    status.state = "failed"
+    status.finished_at = utc_now_iso()
+    status.error_message = message
+    write_status(run_dir, status)
+
+
+def _build_progress_callbacks(run_dir: Path) -> dict[str, Callable[[Any], None]]:
+    def on_train_epoch_end(trainer: Any) -> None:
+        status = read_status(run_dir)
+        if status is None:
+            return
+        # trainer.epoch is 0-based; after epoch 0 ends, current completed = 1
+        epoch_current = int(getattr(trainer, "epoch", 0)) + 1
+        epochs_total = int(getattr(trainer, "epochs", status.epochs_total) or status.epochs_total)
+        status.epoch_current = min(epoch_current, epochs_total)
+        status.epochs_total = epochs_total
+        status.progress_percent = compute_progress_percent(status.epoch_current, epochs_total)
+        status.state = "running"
+        write_status(run_dir, status)
+
+    def on_train_end(trainer: Any) -> None:
+        status = read_status(run_dir)
+        if status is None:
+            return
+        status.metrics = extract_metrics_from_trainer(trainer)
+        best = find_best_weights(run_dir)
+        last = find_last_weights(run_dir)
+        # Ultralytics may expose save_dir / best/last differently
+        best_attr = getattr(trainer, "best", None)
+        last_attr = getattr(trainer, "last", None)
+        if best is None and best_attr is not None:
+            best_path = Path(str(best_attr))
+            if best_path.is_file():
+                best = best_path
+        if last is None and last_attr is not None:
+            last_path = Path(str(last_attr))
+            if last_path.is_file():
+                last = last_path
+        status.best_model_path = str(best) if best else status.best_model_path
+        status.last_model_path = str(last) if last else status.last_model_path
+        status.epoch_current = status.epochs_total
+        status.progress_percent = 100.0
+        write_status(run_dir, status)
+
+    return {
+        "on_train_epoch_end": on_train_epoch_end,
+        "on_fit_epoch_end": on_train_epoch_end,
+        "on_train_end": on_train_end,
+    }
 
 
 def _default_yolo_factory(weights_name: str) -> Any:

@@ -157,14 +157,15 @@ def test_build_train_kwargs(tmp_path: Path) -> None:
         batch=BATCH_AUTO,
         device="cpu",
     )
-    assert kwargs["data"] == str(data_yaml)
+    assert kwargs["data"] == str(data_yaml.resolve())
     assert kwargs["epochs"] == 3
     assert kwargs["imgsz"] == 640
     assert kwargs["batch"] == -1
     assert kwargs["device"] == "cpu"
-    assert kwargs["project"] == str(run_dir.parent)
+    assert kwargs["project"] == str(run_dir.parent.resolve())
     assert kwargs["name"] == "abc"
     assert kwargs["exist_ok"] is True
+    assert Path(kwargs["project"]).is_absolute()
 
 
 def test_find_best_weights(tmp_path: Path) -> None:
