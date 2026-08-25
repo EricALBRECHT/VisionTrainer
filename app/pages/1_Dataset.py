@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
-import tempfile
-import zipfile
 from pathlib import Path
 
 import streamlit as st
 
-from vision_trainer.yolo.parser import ZipExtractionError, extract_zip_dataset
+from vision_trainer.datasets.store import import_zip_to_persistent_dataset
+from vision_trainer.training.session_dataset import SESSION_DATASET_KEY, dataset_to_session_payload
+from vision_trainer.yolo.parser import ZipExtractionError
 from vision_trainer.yolo.validator import validate_dataset
 from vision_trainer.yolo.visualization import ImagePreviewError, collect_sample_images, draw_annotations
-from vision_trainer.training.session_dataset import SESSION_DATASET_KEY, dataset_to_session_payload
 
 st.set_page_config(page_title="Dataset — Vision Trainer", layout="wide")
 st.title("Dataset YOLO")
@@ -23,49 +21,48 @@ uploaded_file = st.file_uploader(
     help="Le ZIP doit contenir un fichier data.yaml à la racine ou dans un sous-dossier.",
 )
 
+# Allow viewing the last validated persistent dataset without re-upload.
 if uploaded_file is None:
+    if SESSION_DATASET_KEY in st.session_state:
+        st.info("Aucun nouvel upload. Le dernier dataset validé reste disponible pour l'entraînement.")
+        payload = st.session_state[SESSION_DATASET_KEY]
+        st.write(f"Dataset : `{payload.get('dataset_id', '—')}`")
+        st.code(payload.get("extract_dir", ""), language=None)
+        st.stop()
     st.info("Importez un dataset YOLO au format ZIP pour commencer.")
     st.stop()
 
-upload_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
-if st.session_state.get("dataset_upload_hash") != upload_hash:
-    if st.session_state.get("dataset_temp_dir"):
-        shutil.rmtree(st.session_state["dataset_temp_dir"], ignore_errors=True)
-        st.session_state.pop("dataset_temp_dir", None)
-        st.session_state.pop("dataset_extract_dir", None)
-        st.session_state.pop("dataset_upload_hash", None)
-        st.session_state.pop(SESSION_DATASET_KEY, None)
+upload_bytes = uploaded_file.getvalue()
+upload_hash = hashlib.sha256(upload_bytes).hexdigest()
 
-    temp_root = Path(tempfile.mkdtemp(prefix="vision-trainer-dataset-"))
-    zip_path = temp_root / "dataset.zip"
-    extract_dir = temp_root / "extracted"
+if st.session_state.get("dataset_upload_hash") != upload_hash:
+    # Do not delete previous persistent datasets (they may be referenced by runs).
+    st.session_state.pop(SESSION_DATASET_KEY, None)
+    st.session_state.pop("dataset_extract_dir", None)
+    st.session_state.pop("dataset_id", None)
 
     try:
-        zip_path.write_bytes(uploaded_file.getvalue())
-        extract_zip_dataset(zip_path, extract_dir)
+        dataset_id, extract_dir = import_zip_to_persistent_dataset(
+            upload_bytes,
+            content_hash=upload_hash,
+        )
     except ZipExtractionError as exc:
-        shutil.rmtree(temp_root, ignore_errors=True)
-        st.error(f"Import refusé pour des raisons de sécurité : {exc}")
-        st.stop()
-    except zipfile.BadZipFile:
-        shutil.rmtree(temp_root, ignore_errors=True)
-        st.error("Archive ZIP invalide ou corrompue.")
+        st.error(f"Import refusé : {exc}")
         st.stop()
     except OSError as exc:
-        shutil.rmtree(temp_root, ignore_errors=True)
         st.error(f"Erreur de lecture ou d'écriture lors de l'import : {exc}")
         st.stop()
 
     st.session_state.dataset_upload_hash = upload_hash
-    st.session_state.dataset_temp_dir = str(temp_root)
     st.session_state.dataset_extract_dir = str(extract_dir)
+    st.session_state.dataset_id = dataset_id
 
 if "dataset_extract_dir" not in st.session_state:
     st.error("L'import du dataset a échoué. Réessayez avec une autre archive.")
     st.stop()
 
 extract_dir = Path(st.session_state.dataset_extract_dir)
-result = validate_dataset(extract_dir)
+result = validate_dataset(extract_dir, containment_root=extract_dir)
 dataset = result.dataset
 
 if dataset is None:
@@ -81,6 +78,8 @@ with col_summary:
     st.metric("Nombre de classes", dataset.num_classes)
     available_splits = [name for name in ("train", "val", "test") if name in dataset.splits]
     st.write("**Splits disponibles :**", ", ".join(available_splits) if available_splits else "Aucun")
+    st.caption(f"Dataset ID : `{st.session_state.get('dataset_id', '—')}`")
+    st.caption(f"Stockage : `{extract_dir}`")
 
     for split_name in available_splits:
         split = dataset.splits[split_name]
@@ -123,7 +122,11 @@ if infos:
 
 if result.is_valid:
     st.success("Le dataset est valide.")
-    st.session_state[SESSION_DATASET_KEY] = dataset_to_session_payload(dataset, extract_dir)
+    st.session_state[SESSION_DATASET_KEY] = dataset_to_session_payload(
+        dataset,
+        extract_dir,
+        dataset_id=st.session_state.get("dataset_id"),
+    )
 else:
     st.error("Le dataset contient des erreurs bloquantes.")
     st.session_state.pop(SESSION_DATASET_KEY, None)

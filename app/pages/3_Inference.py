@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import tempfile
 from pathlib import Path
 
 import streamlit as st
@@ -18,6 +20,7 @@ from vision_trainer.inference.render import (
     build_download_filename,
     draw_detections,
 )
+from vision_trainer.inference.uploads import display_upload_name, safe_internal_upload_path
 from vision_trainer.results.models import SESSION_INFERENCE_WEIGHTS_KEY
 from vision_trainer.training.device import describe_device, is_cuda_available, resolve_device
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
@@ -63,23 +66,24 @@ uploaded = st.file_uploader(
 
 original_image: Image.Image | None = None
 original_name = "image.jpg"
+image_fingerprint = ""
 
 if uploaded is not None:
-    suffix = Path(uploaded.name).suffix.lower()
+    original_name = display_upload_name(uploaded.name)
+    suffix = Path(original_name).suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
         st.error("Format d'image non supporté.")
         st.stop()
 
     temp_dir = Path(st.session_state.get("inference_temp_dir") or "")
     if not temp_dir or not temp_dir.exists():
-        import tempfile
-
         temp_dir = Path(tempfile.mkdtemp(prefix="vision-trainer-inference-"))
         st.session_state["inference_temp_dir"] = str(temp_dir)
 
-    image_path = temp_dir / uploaded.name
-    image_path.write_bytes(uploaded.getvalue())
-    original_name = uploaded.name
+    raw_bytes = uploaded.getvalue()
+    image_fingerprint = hashlib.sha256(raw_bytes).hexdigest()
+    image_path = safe_internal_upload_path(temp_dir, original_name)
+    image_path.write_bytes(raw_bytes)
 
     try:
         original_image = load_image_rgb(image_path)
@@ -88,7 +92,7 @@ if uploaded is not None:
         st.stop()
 
     st.subheader("Image originale")
-    st.image(original_image, use_container_width=True)
+    st.image(original_image, caption=original_name, use_container_width=True)
 
 st.subheader("Paramètres")
 conf = st.slider("Confidence threshold", min_value=0.05, max_value=0.95, value=DEFAULT_CONF, step=0.05)
@@ -110,6 +114,14 @@ except Exception as exc:  # noqa: BLE001
 
 st.info(f"Device réellement sélectionné : **{describe_device(resolved_device)}** (`{resolved_device}`)")
 
+current_binding = {
+    "image_sha256": image_fingerprint,
+    "weights": str(Path(selected_model.weights_path).resolve()),
+    "conf": float(conf),
+    "iou": float(iou),
+    "device": device_choice,
+}
+
 can_run = original_image is not None and bool(selected_model.weights_path)
 run_clicked = st.button("Lancer l'inférence", type="primary", disabled=not can_run)
 
@@ -120,7 +132,6 @@ if run_clicked:
 
     try:
         with st.spinner("Inférence en cours…"):
-            # Cache is keyed by weights path; factory uses the cached model instance.
             cached_model = _load_yolo_model(selected_model.weights_path)
 
             def _factory(_path: str):
@@ -141,6 +152,7 @@ if run_clicked:
         st.error(f"Erreur inattendue pendant l'inférence : {exc}")
     else:
         st.session_state["inference_last_result"] = {
+            "binding": current_binding,
             "detections": [
                 {
                     "class_id": det.class_id,
@@ -157,9 +169,8 @@ if run_clicked:
             "original_name": original_name,
         }
 
-# Display last successful inference for the current session (survives widget reruns)
 last = st.session_state.get("inference_last_result")
-if last:
+if last and last.get("binding") == current_binding and current_binding["image_sha256"]:
     st.subheader("Résultat")
     detections = last["detections"]
     annotated_bytes = last["annotated_jpeg"]
@@ -201,4 +212,9 @@ if last:
         data=annotated_bytes,
         file_name=build_download_filename(last.get("original_name", "image.jpg")),
         mime="image/jpeg",
+    )
+elif last and last.get("binding") != current_binding:
+    st.caption(
+        "Un résultat précédent existe mais ne correspond plus à l'image / modèle / "
+        "seuils / device actuels. Relancez l'inférence."
     )

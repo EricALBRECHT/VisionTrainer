@@ -8,7 +8,12 @@ from vision_trainer.yolo.models import DatasetInfo, SplitInfo
 SESSION_DATASET_KEY = "validated_dataset"
 
 
-def dataset_to_session_payload(dataset: DatasetInfo, extract_dir: Path) -> dict:
+def dataset_to_session_payload(
+    dataset: DatasetInfo,
+    extract_dir: Path,
+    *,
+    dataset_id: str | None = None,
+) -> dict:
     """Serialize a validated dataset for Streamlit session_state."""
     splits: dict[str, dict] = {}
     for name, split in dataset.splits.items():
@@ -17,13 +22,16 @@ def dataset_to_session_payload(dataset: DatasetInfo, extract_dir: Path) -> dict:
             "labels_dir": str(split.labels_dir) if split.labels_dir else None,
             "image_count": split.image_count,
         }
-    return {
+    payload = {
         "extract_dir": str(extract_dir),
         "root": str(dataset.root),
         "yaml_path": str(dataset.yaml_path),
         "class_names": {int(key): value for key, value in dataset.class_names.items()},
         "splits": splits,
     }
+    if dataset_id:
+        payload["dataset_id"] = dataset_id
+    return payload
 
 
 def dataset_from_session_payload(payload: dict) -> DatasetInfo:

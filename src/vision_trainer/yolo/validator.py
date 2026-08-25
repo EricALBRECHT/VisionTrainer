@@ -22,9 +22,20 @@ YOLO_LINE_PATTERN = re.compile(
 )
 
 
-def validate_dataset(root: Path) -> ValidationResult:
-    """Validate a YOLO dataset directory and return structured findings."""
-    dataset, parse_errors = load_dataset_from_directory(root)
+def validate_dataset(
+    root: Path,
+    *,
+    containment_root: Path | None = None,
+) -> ValidationResult:
+    """Validate a YOLO dataset directory and return structured findings.
+
+    When ``containment_root`` is set (ZIP imports), resolved split paths must
+    remain inside that root. When ``None``, parsing keeps its prior behaviour.
+    """
+    dataset, parse_errors = load_dataset_from_directory(
+        root,
+        containment_root=containment_root,
+    )
     issues: list[ValidationIssue] = [
         ValidationIssue(Severity.ERROR, message) for message in parse_errors
     ]

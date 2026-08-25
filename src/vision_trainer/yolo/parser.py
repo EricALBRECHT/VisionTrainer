@@ -13,6 +13,10 @@ from vision_trainer.yolo.models import DatasetInfo, SplitInfo
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 SPLIT_KEYS = ("train", "val", "test")
 
+# ZIP import safety limits (generous for vision datasets; ~215 MB zip must pass).
+MAX_ZIP_MEMBERS = 200_000
+MAX_ZIP_UNCOMPRESSED_BYTES = 20 * 1024 * 1024 * 1024  # 20 GiB
+
 
 class ZipExtractionError(Exception):
     """Raised when a ZIP archive fails security validation before extraction."""
@@ -43,8 +47,21 @@ def extract_zip_dataset(zip_path: Path, destination: Path) -> Path:
         raise ZipExtractionError("Archive ZIP invalide.") from exc
 
     with archive:
+        members = archive.infolist()
+        if len(members) > MAX_ZIP_MEMBERS:
+            raise ZipExtractionError(
+                f"Archive trop volumineuse : {len(members)} entrées "
+                f"(limite = {MAX_ZIP_MEMBERS})."
+            )
+        total_uncompressed = sum(max(0, int(member.file_size)) for member in members)
+        if total_uncompressed > MAX_ZIP_UNCOMPRESSED_BYTES:
+            raise ZipExtractionError(
+                f"Taille décompressée annoncée trop élevée : {total_uncompressed} octets "
+                f"(limite = {MAX_ZIP_UNCOMPRESSED_BYTES})."
+            )
+
         planned_extractions: list[tuple[zipfile.ZipInfo, Path]] = []
-        for member in archive.infolist():
+        for member in members:
             target = _validate_zip_member(member, destination_resolved)
             planned_extractions.append((member, target))
 
@@ -99,12 +116,17 @@ def _extract_zip_member(
         shutil.copyfileobj(source, destination)
 
 
-def load_dataset_from_directory(root: Path) -> tuple[DatasetInfo | None, list[str]]:
+def load_dataset_from_directory(
+    root: Path,
+    *,
+    containment_root: Path | None = None,
+) -> tuple[DatasetInfo | None, list[str]]:
     """
     Parse data.yaml and build dataset metadata.
 
-    Returns (dataset_info, parse_errors). parse_errors are human-readable strings
-    for issues that prevent building DatasetInfo.
+    When ``containment_root`` is set (ZIP imports), resolved ``path``/split directories
+    must remain inside that root. Roboflow ``../train/images`` fallbacks that land
+    inside the extract root remain allowed.
     """
     yaml_path = find_data_yaml(root)
     if yaml_path is None:
@@ -123,11 +145,29 @@ def load_dataset_from_directory(root: Path) -> tuple[DatasetInfo | None, list[st
     if class_names is None:
         return None, errors
 
-    dataset_root = _resolve_dataset_root(yaml_path, raw.get("path"))
     yaml_dir = yaml_path.parent.resolve()
+    containment = containment_root.resolve() if containment_root is not None else None
+
+    dataset_root = _resolve_dataset_root(yaml_path, raw.get("path"))
+    if containment is not None and not _is_within_root(dataset_root, containment):
+        # Absolute/external path: not applicable for ZIP datasets.
+        dataset_root = yaml_dir
+
     if not _path_is_applicable(dataset_root, raw, yaml_dir):
         dataset_root = yaml_dir
-    splits = _parse_splits(raw, dataset_root, yaml_dir, errors)
+
+    if containment is not None and not _is_within_root(dataset_root, containment):
+        return None, [
+            f"Le chemin 'path' sort de la racine du dataset extrait : {dataset_root}"
+        ]
+
+    splits = _parse_splits(
+        raw,
+        dataset_root,
+        yaml_dir,
+        errors,
+        containment_root=containment,
+    )
 
     if errors:
         return None, errors
@@ -274,10 +314,13 @@ def _parse_splits(
     dataset_root: Path,
     yaml_dir: Path,
     errors: list[str],
+    *,
+    containment_root: Path | None = None,
 ) -> dict[str, SplitInfo]:
     splits: dict[str, SplitInfo] = {}
     yaml_dir = yaml_dir.resolve()
     split_base = dataset_root if _path_is_applicable(dataset_root, raw, yaml_dir) else yaml_dir
+    containment = containment_root.resolve() if containment_root is not None else None
 
     for split_name in SPLIT_KEYS:
         split_ref = raw.get(split_name)
@@ -300,7 +343,15 @@ def _parse_splits(
             declared,
             split_base=split_base,
             extracted_root=yaml_dir,
+            containment_root=containment,
         )
+
+        if containment is not None and not _is_within_root(images_dir, containment):
+            errors.append(
+                f"Le split '{split_name}' ({declared}) sort de la racine du dataset extrait."
+            )
+            continue
+
         labels_dir = _infer_labels_dir(images_dir)
         splits[split_name] = SplitInfo(
             name=split_name,
@@ -354,14 +405,21 @@ def _resolve_split_path_tolerant(
     *,
     split_base: Path,
     extracted_root: Path,
+    containment_root: Path | None = None,
 ) -> tuple[Path, bool, str | None]:
     """
     Resolve a split path, with a contained fallback when leading ``../`` miss.
 
     Returns (resolved_path, used_fallback, fallback_ref).
     """
+    containment = containment_root.resolve() if containment_root is not None else None
     declared_path = _resolve_split_path(split_ref, split_base)
-    if declared_path.exists():
+
+    declared_ok = declared_path.exists()
+    if declared_ok and containment is not None and not _is_within_root(declared_path, containment):
+        declared_ok = False
+
+    if declared_ok:
         return declared_path, False, None
 
     stripped = _leading_parent_stripped_ref(split_ref)
@@ -370,6 +428,8 @@ def _resolve_split_path_tolerant(
 
     fallback_path = (extracted_root / stripped).resolve()
     if not _is_within_root(fallback_path, extracted_root):
+        return declared_path, False, None
+    if containment is not None and not _is_within_root(fallback_path, containment):
         return declared_path, False, None
     if not fallback_path.exists():
         return declared_path, False, None

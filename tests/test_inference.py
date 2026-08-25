@@ -82,6 +82,52 @@ def test_normalize_ultralytics_results_coordinates_and_names() -> None:
     assert normalized.image_height == 480
 
 
+def test_normalize_empty_tensor_boxes_like_ultralytics() -> None:
+    """Ultralytics returns Boxes with empty tensors, not None, when conf filters all."""
+    boxes = MagicMock()
+    boxes.xyxy = []
+    boxes.conf = []
+    boxes.cls = []
+    result = MagicMock()
+    result.boxes = boxes
+    result.names = {0: "Carrot", 1: "Onion", 2: "Potato", 3: "Tomato"}
+    result.orig_shape = (720, 1280)
+
+    normalized = normalize_ultralytics_results([result])
+    assert normalized.count == 0
+    assert normalized.detections == []
+    assert normalized.class_names[3] == "Tomato"
+
+
+def test_run_inference_parity_when_ultralytics_returns_zero_boxes(tmp_path: Path) -> None:
+    """Reproduce légumes case: predict @ conf=0.05 yields 0 boxes → VT also returns 0."""
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"x")
+    mock_model = MagicMock()
+    mock_model.names = {0: "Carrot", 1: "Onion", 2: "Potato", 3: "Tomato"}
+    empty_boxes = MagicMock()
+    empty_boxes.xyxy = []
+    empty_boxes.conf = []
+    empty_boxes.cls = []
+    empty = MagicMock()
+    empty.boxes = empty_boxes
+    empty.names = mock_model.names
+    empty.orig_shape = (720, 1280)
+    mock_model.predict.return_value = [empty]
+
+    result = run_inference(
+        weights_path=weights,
+        image=Image.new("RGB", (1280, 720), (1, 1, 1)),
+        conf=0.05,
+        iou=0.45,
+        device_choice="cpu",
+        model_factory=lambda _: mock_model,
+    )
+    assert result.count == 0
+    assert result.class_names == mock_model.names
+    assert mock_model.predict.call_args.kwargs["conf"] == 0.05
+
+
 def test_normalize_empty_detections() -> None:
     result = MagicMock()
     result.boxes = None

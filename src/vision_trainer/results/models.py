@@ -8,6 +8,11 @@ ULTRALYTICS_PLOT_FILES = (
     "results.png",
     "confusion_matrix.png",
     "confusion_matrix_normalized.png",
+    "BoxPR_curve.png",
+    "BoxP_curve.png",
+    "BoxR_curve.png",
+    "BoxF1_curve.png",
+    # Legacy Ultralytics names (kept for older runs).
     "PR_curve.png",
     "P_curve.png",
     "R_curve.png",

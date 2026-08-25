@@ -77,11 +77,12 @@ def draw_annotations(image_path: Path, annotations: list[SampleAnnotation]) -> I
 
         draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
         label = annotation.class_name
-        text_bbox = draw.textbbox((x1, y1), label, font=font)
-        text_height = text_bbox[3] - text_bbox[1]
+        text_height_probe = draw.textbbox((0, 0), label, font=font)
+        text_height = text_height_probe[3] - text_height_probe[1]
         text_y = max(0, y1 - text_height - 2)
+        text_bbox = draw.textbbox((x1, text_y), label, font=font)
         draw.rectangle(
-            [text_bbox[0], text_y, text_bbox[2], text_bbox[1] + (text_y - text_bbox[1])],
+            [text_bbox[0], text_bbox[1], text_bbox[2], text_bbox[3]],
             fill=color,
         )
         draw.text((x1, text_y), label, fill="white", font=font)

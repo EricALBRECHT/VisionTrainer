@@ -2,17 +2,33 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from vision_trainer.io_utils import atomic_write_json
+
+
 STATUS_FILENAME = "status.json"
 REQUEST_FILENAME = "request.json"
 LOG_FILENAME = "train.log"
 PID_FILENAME = "worker.pid"
+LAUNCH_LOCK_FILENAME = ".launch.lock"
+
+TERMINAL_STATES = frozenset({"completed", "failed", "interrupted"})
+ACTIVE_STATES = frozenset({"created", "running"})
 
 RunState = Literal["created", "running", "completed", "failed", "interrupted"]
+
+# UI polling interval for the Training page while a run is active.
+TRAINING_UI_REFRESH_SECONDS = 2
+
+
+def should_auto_refresh(state: str | None) -> bool:
+    """Return True only while the Training UI should poll status/log updates."""
+    return state in ACTIVE_STATES
 
 
 def utc_now_iso() -> str:
@@ -94,26 +110,49 @@ def log_path(run_dir: Path) -> Path:
 def write_status(run_dir: Path, status: RunStatus) -> Path:
     run_dir.mkdir(parents=True, exist_ok=True)
     path = status_path(run_dir)
-    path.write_text(json.dumps(status.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_json(path, status.to_dict())
     return path
 
 
 def read_status(run_dir: Path) -> RunStatus | None:
+    """Read status.json; return None if absent or temporarily unreadable/invalid."""
     path = status_path(run_dir)
     if not path.is_file():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return RunStatus.from_dict(data)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or "run_id" not in data:
+        return None
+    try:
+        return RunStatus.from_dict(data)
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 def write_request(run_dir: Path, payload: dict[str, Any]) -> Path:
     path = request_path(run_dir)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_json(path, payload)
     return path
 
 
 def read_request(run_dir: Path) -> dict[str, Any]:
-    return json.loads(request_path(run_dir).read_text(encoding="utf-8"))
+    data = read_request_safe(run_dir)
+    if data is None:
+        raise FileNotFoundError(f"request.json introuvable ou illisible dans {run_dir}")
+    return data
+
+
+def read_request_safe(run_dir: Path) -> dict[str, Any] | None:
+    path = request_path(run_dir)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def compute_progress_percent(epoch_current: int, epochs_total: int) -> float:
@@ -140,11 +179,15 @@ def is_pid_alive(pid: int | None) -> bool:
 
 def reconcile_run_status(run_dir: Path) -> RunStatus | None:
     """
-    If a run is marked running but its worker process is gone, mark it interrupted.
+    Reconcile disk status with process liveness.
+
+    - running + dead pid → interrupted
+    - created without pid and without launch lock → interrupted (orphaned prepare)
     """
     status = read_status(run_dir)
     if status is None:
         return None
+
     if status.state == "running" and not is_pid_alive(status.pid):
         status.state = "interrupted"
         status.finished_at = status.finished_at or utc_now_iso()
@@ -153,11 +196,28 @@ def reconcile_run_status(run_dir: Path) -> RunStatus | None:
             or "Le processus d'entraînement n'existe plus. Run marqué comme interrupted."
         )
         write_status(run_dir, status)
+        return status
+
+    if status.state == "created" and status.pid is None and not is_launch_lock_held(run_dir.parent):
+        # Only reclaim clearly orphaned prepares (not mid-launch).
+        try:
+            age = time.time() - status_path(run_dir).stat().st_mtime
+        except OSError:
+            age = 0
+        if age > 120:
+            status.state = "interrupted"
+            status.finished_at = status.finished_at or utc_now_iso()
+            status.error_message = (
+                status.error_message
+                or "Préparation orpheline (created sans worker). Run marqué comme interrupted."
+            )
+            write_status(run_dir, status)
+
     return status
 
 
 def find_active_run(runs_root: Path) -> Path | None:
-    """Return the first run directory still actively running (alive pid)."""
+    """Return a run that is actively training (running + alive pid)."""
     if not runs_root.is_dir():
         return None
     for child in sorted(runs_root.iterdir(), reverse=True):
@@ -167,6 +227,91 @@ def find_active_run(runs_root: Path) -> Path | None:
         if status is not None and status.state == "running" and is_pid_alive(status.pid):
             return child
     return None
+
+
+def find_reserved_run(runs_root: Path) -> Path | None:
+    """
+    Return a run that blocks a new launch (created or running).
+
+    ``created`` and ``running`` are both considered reserved/active.
+    """
+    if not runs_root.is_dir():
+        return None
+    for child in sorted(runs_root.iterdir(), reverse=True):
+        if not child.is_dir():
+            continue
+        status = reconcile_run_status(child)
+        if status is None:
+            continue
+        if status.state == "created":
+            return child
+        if status.state == "running" and is_pid_alive(status.pid):
+            return child
+    return None
+
+
+def launch_lock_path(runs_root: Path) -> Path:
+    return runs_root / LAUNCH_LOCK_FILENAME
+
+
+def is_launch_lock_held(runs_root: Path) -> bool:
+    path = launch_lock_path(runs_root)
+    if not path.is_file():
+        return False
+    try:
+        pid = int(path.read_text(encoding="utf-8").strip() or "0")
+    except (OSError, ValueError):
+        return True
+    return is_pid_alive(pid)
+
+
+def acquire_launch_lock(runs_root: Path) -> Path:
+    """Atomically create a launch lock file. Raises OSError if already locked."""
+    runs_root.mkdir(parents=True, exist_ok=True)
+    path = launch_lock_path(runs_root)
+    if is_launch_lock_held(runs_root):
+        raise BlockingIOError(f"Verrou d'entraînement déjà actif : {path}")
+    # Clear stale lock file then create exclusively
+    if path.exists() and not is_launch_lock_held(runs_root):
+        path.unlink(missing_ok=True)
+    fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+    finally:
+        os.close(fd)
+    return path
+
+
+def release_launch_lock(runs_root: Path) -> None:
+    path = launch_lock_path(runs_root)
+    try:
+        if path.is_file():
+            owner = int(path.read_text(encoding="utf-8").strip() or "0")
+            if owner in {0, os.getpid()} or not is_pid_alive(owner):
+                path.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        path.unlink(missing_ok=True)
+
+
+def attach_worker_pid(run_dir: Path, pid: int) -> RunStatus | None:
+    """
+    Parent-only transition: created → running with pid.
+
+    Never overwrites a terminal state already written by the worker.
+    """
+    status = read_status(run_dir)
+    if status is None:
+        return None
+    if status.state in TERMINAL_STATES:
+        return status
+    if status.state not in {"created", "running"}:
+        return status
+    status.pid = pid
+    if status.state == "created":
+        status.state = "running"
+    status.started_at = status.started_at or utc_now_iso()
+    write_status(run_dir, status)
+    return status
 
 
 def read_log_tail(run_dir: Path, max_lines: int = 40) -> str:
