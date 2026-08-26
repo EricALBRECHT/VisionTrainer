@@ -8,11 +8,26 @@ dist/
 build/
 
 # Streamlit
-.streamlit/
+.streamlit/secrets.toml
 
-# Training artifacts and weights
+# Training / Docker persistent data (local default + Compose mount)
 artifacts/
+data/
 *.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
 
-# OS
+# Media / archives (user content)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.zip
+
+# OS / IDE
 .DS_Store
+.idea/
+.vscode/
+Thumbs.db

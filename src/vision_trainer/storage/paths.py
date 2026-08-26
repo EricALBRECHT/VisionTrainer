@@ -34,16 +34,15 @@ def default_allowed_roots(
     runs_root: Path | None = None,
 ) -> list[Path]:
     """Authorized deletion / scan roots for Vision Trainer."""
-    from vision_trainer.datasets.store import ARTIFACTS_DATASETS_DIR
-    from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
+    from vision_trainer.paths import get_datasets_dir, get_runs_dir
 
     if artifacts_root is not None:
         root = artifacts_root.resolve()
         return [root]
 
     roots = [
-        (datasets_root if datasets_root is not None else ARTIFACTS_DATASETS_DIR).resolve(),
-        (runs_root if runs_root is not None else ARTIFACTS_RUNS_DIR).resolve(),
+        (datasets_root if datasets_root is not None else get_datasets_dir()).resolve(),
+        (runs_root if runs_root is not None else get_runs_dir()).resolve(),
     ]
     # Deduplicate while preserving order.
     unique: list[Path] = []

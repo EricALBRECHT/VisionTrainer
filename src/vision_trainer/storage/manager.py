@@ -48,8 +48,7 @@ class StorageManager:
         artifacts_root: Path | None = None,
         protected_paths: Iterable[Path] | None = None,
     ) -> None:
-        from vision_trainer.datasets.store import ARTIFACTS_DATASETS_DIR
-        from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
+        from vision_trainer.paths import get_datasets_dir, get_runs_dir
 
         if artifacts_root is not None:
             self.artifacts_root = artifacts_root.resolve()
@@ -58,10 +57,10 @@ class StorageManager:
         else:
             self.artifacts_root = None
             self.datasets_root = (
-                datasets_root if datasets_root is not None else ARTIFACTS_DATASETS_DIR
+                datasets_root if datasets_root is not None else get_datasets_dir()
             ).resolve()
             self.runs_root = (
-                runs_root if runs_root is not None else ARTIFACTS_RUNS_DIR
+                runs_root if runs_root is not None else get_runs_dir()
             ).resolve()
 
         self.allowed_roots = default_allowed_roots(

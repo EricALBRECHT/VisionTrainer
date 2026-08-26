@@ -1,0 +1,38 @@
+# Vision Trainer — CPU-first Compose stack
+#
+# Launch:
+#   docker compose up --build
+# Open:
+#   http://localhost:8501
+#
+# Persistent data:
+#   Prefer the bind mount ./data (visible on the host).
+#   If Docker Desktop + WSL fails to bind-mount the Linux home directory,
+#   use the named volume profile instead:
+#     docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
+#
+# Future NVIDIA GPU support (do not enable yet unless the toolkit is installed):
+#   - use a CUDA-capable base image in the Dockerfile
+#   - add under this service: `gpus: all`
+
+services:
+  vision-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vision-trainer:cpu
+    container_name: vision-trainer
+    ports:
+      - "8501:8501"
+    environment:
+      VISIONTRAINER_DATA_DIR: /app/data
+      YOLO_CONFIG_DIR: /app/data/ultralytics
+      TMPDIR: /app/data/tmp
+      STREAMLIT_SERVER_ADDRESS: "0.0.0.0"
+      STREAMLIT_SERVER_PORT: "8501"
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    volumes:
+      # Host-persisted datasets, runs, weights, ultralytics cache, tmp uploads
+      - ./data:/app/data
+    restart: unless-stopped

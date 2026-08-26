@@ -74,7 +74,7 @@ m5.metric(
 )
 
 if not overview.groups:
-    st.info("Aucun fichier géré trouvé sous `artifacts/datasets` ou `artifacts/runs`.")
+    st.info("Aucun fichier géré trouvé sous le dossier de données (datasets / runs).")
     st.stop()
 
 st.subheader("Groupes")

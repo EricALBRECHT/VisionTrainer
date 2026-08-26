@@ -1,0 +1,67 @@
+.git
+.gitignore
+.gitattributes
+.github
+
+# Local environments & caches
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+*$py.class
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+dist
+build
+
+# IDE / OS
+.idea
+.vscode
+*.swp
+.DS_Store
+Thumbs.db
+
+# Persistent / heavy user data (mounted at runtime, not baked into the image)
+data
+artifacts
+datasets
+runs
+outputs
+uploads
+
+# Weights & model exports
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+*.pb
+
+# Media
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.zip
+
+# Local Streamlit secrets / caches (keep committed .streamlit/config.toml via negation if needed)
+.streamlit/secrets.toml
+
+# Tests & docs not required at runtime
+tests
+scripts
+*.md
+!README.md
+
+# Misc sample images at repo root
+*.jpg
+*.jpeg
+*.png
+*.webp
+!app/**/*.png

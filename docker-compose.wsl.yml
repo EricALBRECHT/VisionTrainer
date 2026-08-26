@@ -1,0 +1,16 @@
+# Fallback for Docker Desktop on WSL when bind-mounting ./data from the
+# Linux filesystem fails (distro mount service errors).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
+#
+# Data then lives in the Docker volume `vision-trainer-data`
+# (inspect with: docker volume inspect vision-trainer-data).
+
+services:
+  vision-trainer:
+    volumes:
+      - vision-trainer-data:/app/data
+
+volumes:
+  vision-trainer-data:

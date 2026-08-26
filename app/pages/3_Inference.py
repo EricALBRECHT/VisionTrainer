@@ -71,6 +71,21 @@ def _load_yolo_model(weights_path: str):
 
 
 def _ensure_temp_dir() -> Path:
+    from vision_trainer.paths import get_tmp_dir
+
+    # Prefer persistent data/tmp when configured (Docker), else session temp.
+    try:
+        data_tmp = get_tmp_dir()
+        if data_tmp.exists():
+            session_key = st.session_state.get("inference_temp_dir")
+            if session_key and Path(session_key).is_dir():
+                return Path(session_key)
+            temp_dir = Path(tempfile.mkdtemp(prefix="vt-inf-", dir=str(data_tmp)))
+            st.session_state["inference_temp_dir"] = str(temp_dir)
+            return temp_dir
+    except OSError:
+        pass
+
     temp_dir = Path(st.session_state.get("inference_temp_dir") or "")
     if not temp_dir or not temp_dir.exists():
         temp_dir = Path(tempfile.mkdtemp(prefix="vision-trainer-inference-"))
