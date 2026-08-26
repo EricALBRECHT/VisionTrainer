@@ -9,6 +9,7 @@ dependencies = [
     "pyyaml>=6.0",
     "pillow>=10.0.0",
     "ultralytics>=8.3.0",
+    "imageio-ffmpeg>=0.5.0",
 ]
 
 [project.optional-dependencies]
