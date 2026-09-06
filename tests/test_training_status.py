@@ -16,7 +16,9 @@ from vision_trainer.training.status import (
     write_status,
 )
 from vision_trainer.training.trainer import (
+    EpochProgressTracker,
     TrainingRequest,
+    _build_progress_callbacks,
     build_train_kwargs,
     execute_training_from_run_dir,
     prepare_training_run,
@@ -211,6 +213,126 @@ def test_start_subprocess_does_not_train(
     assert len(popen_calls) == before
 
 
+def test_epoch_progress_tracker_percentages_and_no_redundant_writes(tmp_path: Path) -> None:
+    run_dir = tmp_path / "prog"
+    run_dir.mkdir()
+    write_status(
+        run_dir,
+        RunStatus(
+            run_id="prog",
+            state="running",
+            model="YOLO11n",
+            epochs_total=3,
+            epoch_current=0,
+            progress_percent=0.0,
+            pid=1,
+        ),
+    )
+    tracker = EpochProgressTracker(run_dir)
+
+    assert tracker.apply_completed_epoch(1, 3) is True
+    status = read_status(run_dir)
+    assert status is not None
+    assert status.epoch_current == 1
+    assert status.progress_percent == 33.3
+
+    assert tracker.apply_completed_epoch(1, 3) is False  # same epoch → no rewrite
+    assert tracker.write_count == 1
+
+    assert tracker.apply_completed_epoch(2, 3) is True
+    status = read_status(run_dir)
+    assert status is not None
+    assert status.epoch_current == 2
+    assert status.progress_percent == 66.7
+
+    assert tracker.apply_completed_epoch(3, 3) is True
+    status = read_status(run_dir)
+    assert status is not None
+    assert status.epoch_current == 3
+    assert status.progress_percent == 100.0
+    assert tracker.write_count == 3
+
+
+@pytest.mark.parametrize("device_label", ["cpu", "0"])
+def test_epoch_progress_callbacks_device_agnostic(tmp_path: Path, device_label: str) -> None:
+    """Progress callbacks only read trainer.epoch — independent of CUDA/CPU device string."""
+    run_dir = tmp_path / f"run-{device_label}"
+    run_dir.mkdir()
+    write_status(
+        run_dir,
+        RunStatus(
+            run_id=run_dir.name,
+            state="running",
+            model="YOLO11n",
+            epochs_total=3,
+            epoch_current=0,
+            device=device_label,
+            progress_percent=0.0,
+            pid=1,
+        ),
+    )
+    tracker = EpochProgressTracker(run_dir)
+    callbacks = _build_progress_callbacks(run_dir, tracker=tracker)
+    trainer = MagicMock()
+    trainer.epochs = 3
+    trainer.device = device_label
+
+    # Simulate Ultralytics loop: epoch_start → batches → epoch_end
+    for epoch in range(3):
+        trainer.epoch = epoch
+        callbacks["on_train_epoch_start"](trainer)
+        callbacks["on_train_batch_end"](trainer)  # same epoch → no extra write
+        callbacks["on_train_batch_end"](trainer)
+        callbacks["on_train_epoch_end"](trainer)
+        status = read_status(run_dir)
+        assert status is not None
+        assert status.epoch_current == epoch + 1
+        assert status.progress_percent == compute_progress_percent(epoch + 1, 3)
+
+    # Extra batch/epoch callbacks must not rewrite the same completed epoch.
+    writes_after_loop = tracker.write_count
+    callbacks["on_train_epoch_end"](trainer)
+    callbacks["on_train_batch_end"](trainer)
+    assert tracker.write_count == writes_after_loop
+
+
+def test_batch_end_fallback_detects_epoch_advance(tmp_path: Path) -> None:
+    run_dir = tmp_path / "batch-fallback"
+    run_dir.mkdir()
+    write_status(
+        run_dir,
+        RunStatus(
+            run_id="batch-fallback",
+            state="running",
+            model="YOLO11n",
+            epochs_total=3,
+            epoch_current=0,
+            progress_percent=0.0,
+            pid=1,
+        ),
+    )
+    tracker = EpochProgressTracker(run_dir)
+    callbacks = _build_progress_callbacks(run_dir, tracker=tracker)
+    trainer = MagicMock()
+    trainer.epochs = 3
+
+    trainer.epoch = 0
+    callbacks["on_train_batch_end"](trainer)
+    assert read_status(run_dir).epoch_current == 0
+
+    # Epoch advanced without on_train_epoch_end (fallback).
+    trainer.epoch = 1
+    callbacks["on_train_batch_end"](trainer)
+    status = read_status(run_dir)
+    assert status is not None
+    assert status.epoch_current == 1
+    assert status.progress_percent == 33.3
+
+    trainer.epoch = 1
+    callbacks["on_train_batch_end"](trainer)
+    assert tracker.write_count == 1
+
+
 def test_execute_training_updates_progress_and_metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -231,6 +353,7 @@ def test_execute_training_updates_progress_and_metrics(
     )
 
     callbacks: dict[str, list] = {}
+    progress_snapshots: list[tuple[int, float]] = []
 
     mock_model = MagicMock()
 
@@ -244,10 +367,20 @@ def test_execute_training_updates_progress_and_metrics(
         assert kwargs["name"] == prepared.run_id
         trainer = MagicMock()
         trainer.epochs = 3
+        trainer.callbacks = callbacks
+        for callback in callbacks.get("on_train_start", []):
+            callback(trainer)
         for epoch in range(3):
             trainer.epoch = epoch
+            for callback in callbacks.get("on_train_epoch_start", []):
+                callback(trainer)
+            for callback in callbacks.get("on_train_batch_end", []):
+                callback(trainer)
             for callback in callbacks.get("on_train_epoch_end", []):
                 callback(trainer)
+            status = read_status(prepared.run_dir)
+            assert status is not None
+            progress_snapshots.append((status.epoch_current, status.progress_percent))
         weights = prepared.run_dir / "weights"
         weights.mkdir(parents=True, exist_ok=True)
         (weights / "best.pt").write_bytes(b"best")
@@ -276,6 +409,12 @@ def test_execute_training_updates_progress_and_metrics(
     assert final_status.last_model_path is not None
     assert final_status.metrics.map50 == 0.77
     assert final_status.metrics.map50_95 == 0.55
+
+    assert progress_snapshots == [
+        (1, 33.3),
+        (2, 66.7),
+        (3, 100.0),
+    ]
 
     # Intermediate progress was written during epochs (last epoch end = 100 already).
     raw = json.loads((prepared.run_dir / "status.json").read_text(encoding="utf-8"))

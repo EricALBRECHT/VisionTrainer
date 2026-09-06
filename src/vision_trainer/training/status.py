@@ -298,6 +298,7 @@ def attach_worker_pid(run_dir: Path, pid: int) -> RunStatus | None:
     Parent-only transition: created → running with pid.
 
     Never overwrites a terminal state already written by the worker.
+    Preserves any progress fields already advanced by a fast worker.
     """
     status = read_status(run_dir)
     if status is None:
@@ -310,6 +311,26 @@ def attach_worker_pid(run_dir: Path, pid: int) -> RunStatus | None:
     if status.state == "created":
         status.state = "running"
     status.started_at = status.started_at or utc_now_iso()
+    # Re-read once so we do not clobber epoch progress written between our
+    # first read and this write (GPU runs can finish an epoch very quickly).
+    latest = read_status(run_dir)
+    if latest is not None:
+        if latest.state in TERMINAL_STATES:
+            return latest
+        status.epoch_current = max(int(status.epoch_current), int(latest.epoch_current))
+        status.progress_percent = max(float(status.progress_percent), float(latest.progress_percent))
+        status.epochs_total = max(int(status.epochs_total), int(latest.epochs_total))
+        if latest.metrics is not None and (
+            latest.metrics.precision is not None
+            or latest.metrics.recall is not None
+            or latest.metrics.map50 is not None
+            or latest.metrics.map50_95 is not None
+        ):
+            status.metrics = latest.metrics
+        if latest.best_model_path:
+            status.best_model_path = latest.best_model_path
+        if latest.last_model_path:
+            status.last_model_path = latest.last_model_path
     write_status(run_dir, status)
     return status
 

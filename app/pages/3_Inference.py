@@ -34,8 +34,8 @@ from vision_trainer.inference.video import (
     run_video_inference,
 )
 from vision_trainer.results.models import SESSION_INFERENCE_WEIGHTS_KEY
-from vision_trainer.training.device import describe_device, is_cuda_available, resolve_device
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
+from vision_trainer.ui.device_selector import render_device_selector
 
 st.set_page_config(page_title="Inférence — Vision Trainer", layout="wide")
 st.title("Inférence")
@@ -123,21 +123,10 @@ iou = st.slider(
     key=f"inference_iou_{media_mode}",
 )
 
-cuda_available = is_cuda_available()
-device_options = ["Auto", "CPU"]
-if cuda_available:
-    device_options.append("CUDA")
-device_label = st.selectbox("Device", options=device_options, index=0)
-device_choice_map = {"Auto": "auto", "CPU": "cpu", "CUDA": "cuda"}
-device_choice = device_choice_map[device_label]
-
-try:
-    resolved_device = resolve_device(device_choice)
-except Exception as exc:  # noqa: BLE001
-    st.error(str(exc))
-    st.stop()
-
-st.info(f"Device réellement sélectionné : **{describe_device(resolved_device)}** (`{resolved_device}`)")
+device_choice, resolved_device, _resolved_label = render_device_selector(
+    key_prefix=f"infer_{media_mode}",
+    default_choice="auto",
+)
 
 # ---------------------------------------------------------------------------
 # Image mode (unchanged behaviour)

@@ -11,9 +11,8 @@
 #   use the named volume profile instead:
 #     docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
 #
-# Future NVIDIA GPU support (do not enable yet unless the toolkit is installed):
-#   - use a CUDA-capable base image in the Dockerfile
-#   - add under this service: `gpus: all`
+# NVIDIA GPU: use the overlay file (does not replace this CPU service definition):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 
 services:
   vision-trainer:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vision_trainer.training.data_yaml import write_resolved_data_yaml
-from vision_trainer.training.device import DeviceChoice, DeviceError, describe_device, resolve_device
+from vision_trainer.training.device import DeviceChoice, DeviceError, cuda_oom_user_message, describe_device, resolve_device
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR, create_run_directory
 from vision_trainer.training.status import (
     TERMINAL_STATES,
@@ -321,17 +321,13 @@ def execute_training_from_run_dir(
         _mark_failed(run_dir, status, message)
         raise TrainingError(message) from exc
 
-    callbacks = _build_progress_callbacks(run_dir)
-    for event, callback in callbacks.items():
-        try:
-            model.add_callback(event, callback)
-        except Exception:  # noqa: BLE001 - some mocks may not support callbacks
-            pass
+    _register_progress_callbacks(model, run_dir)
 
     try:
         model.train(**train_kwargs)
     except Exception as exc:  # noqa: BLE001
-        message = f"Erreur pendant l'entraînement : {exc}"
+        oom = cuda_oom_user_message(exc)
+        message = oom or f"Erreur pendant l'entraînement : {exc}"
         _mark_failed(run_dir, status, message)
         raise TrainingError(message) from exc
 
@@ -419,28 +415,139 @@ def _mark_failed(run_dir: Path, status: RunStatus, message: str) -> None:
     write_status(run_dir, status)
 
 
-def _build_progress_callbacks(run_dir: Path) -> dict[str, Callable[[Any], None]]:
-    def on_train_epoch_end(trainer: Any) -> None:
-        status = read_status(run_dir)
-        if status is None or status.state in TERMINAL_STATES:
-            return
-        # trainer.epoch is 0-based; after epoch 0 ends, current completed = 1
-        epoch_current = int(getattr(trainer, "epoch", 0)) + 1
-        epochs_total = int(getattr(trainer, "epochs", status.epochs_total) or status.epochs_total)
-        status.epoch_current = min(epoch_current, epochs_total)
-        status.epochs_total = epochs_total
-        status.progress_percent = compute_progress_percent(status.epoch_current, epochs_total)
-        status.state = "running"
-        write_status(run_dir, status)
+def _coerce_non_negative_int(value: Any, default: int = 0) -> int:
+    """Best-effort conversion of trainer epoch/epochs fields (int, float, 0-dim tensor)."""
+    if value is None:
+        return default
+    try:
+        if hasattr(value, "item") and callable(value.item):
+            value = value.item()
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
 
-    def on_train_end(trainer: Any) -> None:
+
+def _read_status_retry(run_dir: Path, *, attempts: int = 3) -> RunStatus | None:
+    """Read status.json with short retries (bind-mount / concurrent UI readers)."""
+    status: RunStatus | None = None
+    for attempt in range(max(1, attempts)):
         status = read_status(run_dir)
+        if status is not None:
+            return status
+        if attempt + 1 < attempts:
+            import time
+
+            time.sleep(0.01 * (attempt + 1))
+    return status
+
+
+def _trainer_epochs_total(trainer: Any, fallback: int) -> int:
+    total = _coerce_non_negative_int(getattr(trainer, "epochs", None), 0)
+    if total <= 0:
+        args = getattr(trainer, "args", None)
+        total = _coerce_non_negative_int(getattr(args, "epochs", None), 0)
+    return total if total > 0 else max(1, fallback)
+
+
+class EpochProgressTracker:
+    """
+    Persist epoch progress to status.json via Ultralytics callbacks.
+
+    Ultralytics ``trainer.epoch`` is 0-based. We store 1-based completed epochs
+    (after epoch 0 ends → epoch_current=1 → ~33% for a 3-epoch run).
+
+    Writes only when the completed-epoch counter advances (never every batch).
+    ``on_train_batch_end`` / ``on_train_epoch_start`` are fallbacks when
+    ``on_train_epoch_end`` is skipped (e.g. OOM epoch restart paths).
+    """
+
+    def __init__(self, run_dir: Path) -> None:
+        self.run_dir = Path(run_dir)
+        self._last_written_epoch = 0
+        self._last_seen_epoch_0based: int | None = None
+        self.write_count = 0
+
+    def apply_completed_epoch(self, epoch_current: int, epochs_total: int | None = None) -> bool:
+        """Update status.json when ``epoch_current`` advances. Returns True if a write occurred."""
+        if epoch_current <= self._last_written_epoch:
+            return False
+
+        status = _read_status_retry(self.run_dir)
+        if status is None or status.state in TERMINAL_STATES:
+            return False
+
+        total = int(epochs_total) if epochs_total and int(epochs_total) > 0 else int(status.epochs_total)
+        if total <= 0:
+            total = 1
+        epoch_current = min(max(0, int(epoch_current)), total)
+
+        if epoch_current <= self._last_written_epoch:
+            return False
+        if status.epoch_current >= epoch_current and status.epoch_current > 0:
+            self._last_written_epoch = max(self._last_written_epoch, status.epoch_current)
+            return False
+
+        status.epoch_current = epoch_current
+        status.epochs_total = total
+        status.progress_percent = compute_progress_percent(epoch_current, total)
+        status.state = "running"
+        write_status(self.run_dir, status)
+        self._last_written_epoch = epoch_current
+        self.write_count += 1
+        print(
+            f"[vision-trainer] progression {epoch_current}/{total} "
+            f"({status.progress_percent}%)",
+            flush=True,
+        )
+        return True
+
+    def on_train_epoch_end(self, trainer: Any) -> None:
+        epoch_0 = _coerce_non_negative_int(getattr(trainer, "epoch", None), -1)
+        if epoch_0 < 0:
+            return
+        status = _read_status_retry(self.run_dir)
+        fallback_total = status.epochs_total if status is not None else 1
+        total = _trainer_epochs_total(trainer, fallback_total)
+        # After 0-based epoch N finishes, N+1 epochs are completed.
+        self.apply_completed_epoch(epoch_0 + 1, total)
+        self._last_seen_epoch_0based = epoch_0
+
+    def on_train_epoch_start(self, trainer: Any) -> None:
+        epoch_0 = _coerce_non_negative_int(getattr(trainer, "epoch", None), -1)
+        if epoch_0 < 0:
+            return
+        self._last_seen_epoch_0based = epoch_0
+        if epoch_0 <= 0:
+            return
+        status = _read_status_retry(self.run_dir)
+        fallback_total = status.epochs_total if status is not None else 1
+        total = _trainer_epochs_total(trainer, fallback_total)
+        # Entering epoch N (0-based) means epochs 0..N-1 are done.
+        self.apply_completed_epoch(epoch_0, total)
+
+    def on_train_batch_end(self, trainer: Any) -> None:
+        epoch_0 = _coerce_non_negative_int(getattr(trainer, "epoch", None), -1)
+        if epoch_0 < 0:
+            return
+        if self._last_seen_epoch_0based is None:
+            self._last_seen_epoch_0based = epoch_0
+            return
+        if epoch_0 == self._last_seen_epoch_0based:
+            return
+        # Epoch index advanced without a prior epoch_end write (fallback path).
+        self._last_seen_epoch_0based = epoch_0
+        status = _read_status_retry(self.run_dir)
+        fallback_total = status.epochs_total if status is not None else 1
+        total = _trainer_epochs_total(trainer, fallback_total)
+        self.apply_completed_epoch(epoch_0, total)
+
+    def on_train_end(self, trainer: Any) -> None:
+        status = _read_status_retry(self.run_dir)
         if status is None or status.state in TERMINAL_STATES:
             return
         status.metrics = extract_metrics_from_trainer(trainer)
-        best = find_best_weights(run_dir)
-        last = find_last_weights(run_dir)
-        # Ultralytics may expose save_dir / best/last differently
+        best = find_best_weights(self.run_dir)
+        last = find_last_weights(self.run_dir)
         best_attr = getattr(trainer, "best", None)
         last_attr = getattr(trainer, "last", None)
         if best is None and best_attr is not None:
@@ -455,13 +562,65 @@ def _build_progress_callbacks(run_dir: Path) -> dict[str, Callable[[Any], None]]
         status.last_model_path = str(last) if last else status.last_model_path
         status.epoch_current = status.epochs_total
         status.progress_percent = compute_progress_percent(status.epoch_current, status.epochs_total)
-        write_status(run_dir, status)
+        write_status(self.run_dir, status)
+        self._last_written_epoch = max(self._last_written_epoch, status.epoch_current)
+        self.write_count += 1
+
+
+def _build_progress_callbacks(
+    run_dir: Path,
+    tracker: EpochProgressTracker | None = None,
+) -> dict[str, Callable[[Any], None]]:
+    """Build Ultralytics callback map for live status.json progress updates."""
+    progress = tracker if tracker is not None else EpochProgressTracker(run_dir)
+
+    def on_train_start(trainer: Any) -> None:
+        # Re-bind on the live trainer in case integrations reshuffled callbacks.
+        callback_map = {
+            "on_train_epoch_start": progress.on_train_epoch_start,
+            "on_train_epoch_end": progress.on_train_epoch_end,
+            "on_fit_epoch_end": progress.on_train_epoch_end,
+            "on_train_batch_end": progress.on_train_batch_end,
+            "on_train_end": progress.on_train_end,
+        }
+        trainer_callbacks = getattr(trainer, "callbacks", None)
+        if not isinstance(trainer_callbacks, dict):
+            return
+        for event, callback in callback_map.items():
+            bucket = trainer_callbacks.setdefault(event, [])
+            if callback not in bucket:
+                bucket.append(callback)
 
     return {
-        "on_train_epoch_end": on_train_epoch_end,
-        "on_fit_epoch_end": on_train_epoch_end,
-        "on_train_end": on_train_end,
+        "on_train_start": on_train_start,
+        "on_train_epoch_start": progress.on_train_epoch_start,
+        "on_train_epoch_end": progress.on_train_epoch_end,
+        "on_fit_epoch_end": progress.on_train_epoch_end,
+        "on_train_batch_end": progress.on_train_batch_end,
+        "on_train_end": progress.on_train_end,
     }
+
+
+def _register_progress_callbacks(model: Any, run_dir: Path) -> EpochProgressTracker:
+    """Attach progress callbacks on a YOLO model (add_callback + direct list append)."""
+    tracker = EpochProgressTracker(run_dir)
+    callbacks = _build_progress_callbacks(run_dir, tracker=tracker)
+    model_callbacks = getattr(model, "callbacks", None)
+
+    for event, callback in callbacks.items():
+        registered = False
+        add_cb = getattr(model, "add_callback", None)
+        if callable(add_cb):
+            try:
+                add_cb(event, callback)
+                registered = True
+            except Exception:  # noqa: BLE001 - mocks / alternate YOLO wrappers
+                registered = False
+        if not registered and isinstance(model_callbacks, dict):
+            bucket = model_callbacks.setdefault(event, [])
+            if callback not in bucket:
+                bucket.append(callback)
+    return tracker
 
 
 def _default_yolo_factory(weights_name: str) -> Any:

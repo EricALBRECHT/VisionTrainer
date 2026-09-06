@@ -6,7 +6,7 @@ from typing import Any, Callable
 from PIL import Image, UnidentifiedImageError
 
 from vision_trainer.inference.models import Detection, InferenceResult
-from vision_trainer.training.device import DeviceChoice, DeviceError, resolve_device
+from vision_trainer.training.device import DeviceChoice, DeviceError, cuda_oom_user_message, resolve_device
 
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 DEFAULT_CONF = 0.25
@@ -189,7 +189,8 @@ def run_inference(
     try:
         results = model.predict(source=source, **predict_kwargs)
     except Exception as exc:  # noqa: BLE001
-        raise InferenceError(f"Erreur pendant l'inférence : {exc}") from exc
+        oom = cuda_oom_user_message(exc)
+        raise InferenceError(oom or f"Erreur pendant l'inférence : {exc}") from exc
 
     normalized = normalize_ultralytics_results(results, class_names=class_names)
     if normalized.image_width == 0 or normalized.image_height == 0:

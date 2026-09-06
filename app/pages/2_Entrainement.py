@@ -5,7 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from vision_trainer.training.device import describe_device, is_cuda_available, resolve_device
+from vision_trainer.training.device import describe_device
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 from vision_trainer.training.session_dataset import (
     SESSION_DATASET_KEY,
@@ -32,6 +32,7 @@ from vision_trainer.training.trainer import (
     prepare_training_run,
     start_training_subprocess,
 )
+from vision_trainer.ui.device_selector import render_device_selector
 
 st.set_page_config(page_title="Entraînement — Vision Trainer", layout="wide")
 st.title("Entraînement YOLO")
@@ -228,28 +229,11 @@ batch_mode = st.selectbox(
 )
 batch = BATCH_AUTO if str(batch_mode).startswith("Auto") else int(batch_mode)
 
-cuda_available = is_cuda_available()
-device_options = ["Auto", "CPU"]
-if cuda_available:
-    device_options.append("CUDA")
-
-device_label = st.selectbox(
-    "Device",
-    options=device_options,
-    index=0,
+device_choice, resolved_device, resolved_label = render_device_selector(
+    key_prefix="train",
     disabled=training_locked or dataset is None,
+    default_choice="auto",
 )
-device_choice_map = {"Auto": "auto", "CPU": "cpu", "CUDA": "cuda"}
-device_choice = device_choice_map[device_label]
-
-try:
-    resolved_device = resolve_device(device_choice)
-    resolved_label = describe_device(resolved_device)
-except Exception as exc:  # noqa: BLE001
-    st.error(str(exc))
-    st.stop()
-
-st.info(f"Device réellement sélectionné : **{resolved_label}** (`{resolved_device}`)")
 
 start = st.button(
     "Lancer l'entraînement",

@@ -18,7 +18,7 @@ from vision_trainer.inference.predictor import (
     normalize_ultralytics_results,
 )
 from vision_trainer.inference.render import draw_detections
-from vision_trainer.training.device import DeviceChoice, DeviceError, resolve_device
+from vision_trainer.training.device import DeviceChoice, DeviceError, cuda_oom_user_message, resolve_device
 
 SUPPORTED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv"}
 VIDEO_DEFAULT_CONF = 0.50
@@ -193,8 +193,10 @@ def run_video_inference(
             try:
                 results = model.predict(source=np.asarray(pil_frame), **predict_kwargs)
             except Exception as exc:  # noqa: BLE001
+                oom = cuda_oom_user_message(exc)
                 raise VideoInferenceError(
-                    f"Erreur pendant l'inférence (frame {frames_done + 1}) : {exc}"
+                    oom
+                    or f"Erreur pendant l'inférence (frame {frames_done + 1}) : {exc}"
                 ) from exc
 
             normalized = normalize_ultralytics_results(results, class_names=class_names)

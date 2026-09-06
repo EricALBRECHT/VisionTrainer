@@ -83,9 +83,48 @@ docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
 Les données sont alors dans le volume Docker `vision-trainer-data`.
 
 
-### CPU / GPU
+## Docker CPU
 
-Cette image Docker est **CPU**. Le support GPU NVIDIA pourra être ajouté plus tard (image CUDA + `gpus: all` dans Compose) sans changer le workflow utilisateur.
+```bash
+docker compose up --build
+```
+
+Puis : http://localhost:8501
+
+Sur Docker Desktop + WSL si le bind-mount `./data` échoue :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
+```
+
+## Docker GPU NVIDIA
+
+Prérequis :
+
+- GPU NVIDIA + drivers à jour
+- Linux : [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+- Windows : Docker Desktop avec support GPU WSL2 activé
+
+Lancement :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+Avec le fallback volume WSL si besoin :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.wsl.yml up --build
+```
+
+Vérifier CUDA dans le conteneur :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec vision-trainer \
+  python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.device_count()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'n/a')"
+```
+
+La configuration CPU (`docker compose up --build`) reste utilisable sans GPU.
 
 ## Tests
 
