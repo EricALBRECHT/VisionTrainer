@@ -154,12 +154,6 @@ if active_status is None and hint and Path(hint).is_dir():
     active_run_dir = Path(hint)
     active_status = load_run_for_ui(active_run_dir)
 
-if active_status is not None and active_run_dir is not None:
-    if should_auto_refresh(active_status.state):
-        _live_run_followup(active_run_dir)
-    else:
-        _render_run_followup(active_status, active_run_dir)
-
 training_locked = active_status is not None and active_status.state in ACTIVE_STATES
 
 payload = st.session_state.get(SESSION_DATASET_KEY)
@@ -176,7 +170,7 @@ if dataset is None:
         st.warning(
             "Aucun dataset valide n'est disponible pour lancer un **nouvel** entraînement. "
             "Importez-en un sur la page **Dataset**. "
-            "Le suivi d'un run existant reste accessible ci-dessus s'il y en a un."
+            "Le suivi d'un run existant reste accessible ci-dessous s'il y en a un."
         )
 else:
     if "train" not in dataset.splits:
@@ -263,3 +257,9 @@ if start and not training_locked and dataset is not None:
         st.error(f"Impossible de démarrer l'entraînement : {exc}")
     except Exception as exc:  # noqa: BLE001
         st.error(f"Erreur inattendue au démarrage : {exc}")
+
+if active_status is not None and active_run_dir is not None:
+    if should_auto_refresh(active_status.state):
+        _live_run_followup(active_run_dir)
+    else:
+        _render_run_followup(active_status, active_run_dir)
