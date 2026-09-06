@@ -17,7 +17,13 @@ from vision_trainer.inference.predictor import (
     extract_class_names,
     normalize_ultralytics_results,
 )
-from vision_trainer.inference.render import AnnotationScale, compute_annotation_style, draw_detections
+from vision_trainer.inference.render import (
+    DISPLAY_MAX_WIDTH,
+    AnnotationScale,
+    compute_annotation_style,
+    compute_display_transform,
+    draw_detections,
+)
 from vision_trainer.training.device import DeviceChoice, DeviceError, cuda_oom_user_message, resolve_device
 
 SUPPORTED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv"}
@@ -105,6 +111,7 @@ def run_video_inference(
     model_factory: Callable[[str], Any] | None = None,
     progress_callback: ProgressCallback | None = None,
     annotation_scale: AnnotationScale | str = "auto",
+    max_display_width: int = DISPLAY_MAX_WIDTH,
 ) -> VideoInferenceResult:
     """
     Run detection on each frame and write an annotated MP4.
@@ -178,8 +185,18 @@ def run_video_inference(
                 f"Impossible d'ouvrir la vidéo : {source.name}"
             )
 
-        writer = _open_video_writer(raw_output, output_fps, width, height)
-        annotation_style = compute_annotation_style(width, height, annotation_scale)
+        display = compute_display_transform(width, height, max_width=max_display_width)
+        writer = _open_video_writer(
+            raw_output,
+            output_fps,
+            display.display_width,
+            display.display_height,
+        )
+        annotation_style = compute_annotation_style(
+            display.display_width,
+            display.display_height,
+            annotation_scale,
+        )
 
         while True:
             ok, frame_bgr = capture.read()
@@ -211,6 +228,8 @@ def run_video_inference(
                 normalized.detections,
                 scale=annotation_scale,
                 style=annotation_style,
+                max_display_width=max_display_width,
+                fit_to_display=True,
             )
             out_bgr = cv2.cvtColor(np.asarray(annotated.convert("RGB")), cv2.COLOR_RGB2BGR)
             writer.write(out_bgr)

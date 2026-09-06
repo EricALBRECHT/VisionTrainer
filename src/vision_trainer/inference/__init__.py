@@ -22,8 +22,10 @@ from vision_trainer.inference.render import (
     annotated_image_to_jpeg_bytes,
     build_download_filename,
     compute_annotation_style,
+    compute_display_transform,
     draw_detections,
     format_detection_label,
+    scale_box_to_display,
 )
 from vision_trainer.inference.video import (
     SUPPORTED_VIDEO_SUFFIXES,
@@ -53,6 +55,7 @@ __all__ = [
     "build_predict_kwargs",
     "build_video_output_filename",
     "compute_annotation_style",
+    "compute_display_transform",
     "discover_trained_models",
     "draw_detections",
     "format_detection_label",
@@ -62,4 +65,5 @@ __all__ = [
     "probe_video",
     "run_inference",
     "run_video_inference",
+    "scale_box_to_display",
 ]

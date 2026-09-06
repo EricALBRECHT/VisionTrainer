@@ -16,11 +16,14 @@ from vision_trainer.inference.predictor import (
     run_inference,
 )
 from vision_trainer.inference.render import (
+    DISPLAY_MAX_WIDTH,
     annotated_image_to_jpeg_bytes,
     build_download_filename,
     compute_annotation_style,
+    compute_display_transform,
     draw_detections,
     format_detection_label,
+    scale_box_to_display,
 )
 
 
@@ -268,25 +271,57 @@ def test_load_image_rejects_unsupported_and_corrupt(tmp_path: Path) -> None:
         load_image_rgb(corrupt)
 
 
-def test_compute_annotation_style_scales_with_resolution() -> None:
+def test_compute_display_transform_and_box_scaling() -> None:
+    # Smartphone photo → capped display canvas.
+    transform = compute_display_transform(4032, 3024, max_width=1200)
+    assert transform.display_width == 1200
+    assert transform.display_height == 900
+    assert transform.was_resized is True
+    assert abs(transform.scale_x - (1200 / 4032)) < 1e-9
+    assert abs(transform.scale_y - (900 / 3024)) < 1e-9
+
+    x1, y1, x2, y2 = scale_box_to_display(403.2, 302.4, 2016.0, 1512.0, transform)
+    assert abs(x1 - 120.0) < 1e-6
+    assert abs(y1 - 90.0) < 1e-6
+    assert abs(x2 - 600.0) < 1e-6
+    assert abs(y2 - 450.0) < 1e-6
+
+    # Already small: no resize.
+    native = compute_display_transform(640, 480, max_width=1200)
+    assert native.display_width == 640
+    assert native.display_height == 480
+    assert native.was_resized is False
+    assert native.scale_x == 1.0
+
+    # Portrait smartphone.
+    portrait = compute_display_transform(3024, 4032, max_width=1200)
+    assert portrait.display_width == 1200
+    assert portrait.display_height == 1600
+
+
+def test_compute_annotation_style_targets_display_canvas() -> None:
+    s1200 = compute_annotation_style(1200, 900, "auto")
+    assert s1200.font_size == 22
+    assert s1200.line_width == 3
+
     s640 = compute_annotation_style(640, 640, "auto")
-    s1080 = compute_annotation_style(1920, 1080, "auto")
-    s4k = compute_annotation_style(3840, 2160, "auto")
+    assert 16 <= s640.font_size <= 24
+    assert 2 <= s640.line_width <= 4
 
-    assert s640.line_width == 2
-    assert s640.font_size == 22
-    assert s1080.line_width == 5
-    assert s1080.font_size == 53
-    assert s4k.line_width == 9
-    assert s4k.font_size == 105
+    # Style follows the display canvas, not a 4K original.
+    s_display_from_phone = compute_annotation_style(1200, 900, "auto")
+    s_raw_4k = compute_annotation_style(4032, 3024, "auto")
+    # If someone wrongly styled on the original, font would hit the 40px clamp;
+    # display styling stays in the readable mid-20s.
+    assert s_display_from_phone.font_size == 22
+    assert s_raw_4k.font_size == 40  # clamped — why we must style after resize
 
-    # Larger presets grow; small stays readable (min font 12).
-    large_640 = compute_annotation_style(640, 640, "large")
-    small_tiny = compute_annotation_style(80, 60, "small")
-    assert large_640.font_size > s640.font_size
-    assert large_640.line_width >= s640.line_width
-    assert small_tiny.font_size >= 12
-    assert small_tiny.line_width >= 2
+    large = compute_annotation_style(1200, 900, "large")
+    small = compute_annotation_style(1200, 900, "small")
+    assert large.font_size > s1200.font_size
+    assert small.font_size < s1200.font_size
+    assert 2 <= small.line_width <= 4
+    assert 2 <= large.line_width <= 4
 
 
 def test_draw_detections_and_export() -> None:
@@ -302,7 +337,7 @@ def test_draw_detections_and_export() -> None:
             y2=100,
         )
     ]
-    assert format_detection_label(detections[0]) == "pothole 87%"
+    assert format_detection_label(detections[0]) == "pothole 0.87"
     annotated = draw_detections(image, detections)
     assert annotated.size == image.size
     assert annotated.getpixel((25, 35)) != image.getpixel((25, 35)) or annotated != image
@@ -310,6 +345,27 @@ def test_draw_detections_and_export() -> None:
     jpeg_bytes = annotated_image_to_jpeg_bytes(annotated)
     assert jpeg_bytes[:2] == b"\xff\xd8"
     assert build_download_filename("street.png") == "prediction_street.jpg"
+
+
+def test_draw_detections_downscales_hires_before_annotating() -> None:
+    image = Image.new("RGB", (4032, 3024), (240, 240, 240))
+    detections = [
+        Detection(
+            class_id=0,
+            class_name="Tomato",
+            confidence=0.96,
+            x1=403.2,
+            y1=302.4,
+            x2=2016.0,
+            y2=1512.0,
+        )
+    ]
+    annotated = draw_detections(image, detections, scale="auto", max_display_width=1200)
+    assert annotated.size == (1200, 900)
+    # Outline sits on the scaled top-left corner ≈ (120, 90).
+    assert annotated.getpixel((120, 90)) != (240, 240, 240)
+    # Label badge is drawn just above the box.
+    assert annotated.getpixel((130, 70)) != (240, 240, 240)
 
 
 def test_draw_detections_respects_scale_preset() -> None:
@@ -327,6 +383,8 @@ def test_draw_detections_respects_scale_preset() -> None:
     ]
     small = draw_detections(image, detections, scale="small")
     large = draw_detections(image, detections, scale="large")
-    assert small.size == large.size == image.size
-    # Different stroke/font should change some pixels near the box.
+    # Both fit to DISPLAY_MAX_WIDTH.
+    expected_w = min(1920, DISPLAY_MAX_WIDTH)
+    expected_h = round(1080 * (expected_w / 1920))
+    assert small.size == large.size == (expected_w, expected_h)
     assert small.tobytes() != large.tobytes()
