@@ -16,6 +16,7 @@ from vision_trainer.inference.predictor import (
     run_inference,
 )
 from vision_trainer.inference.render import (
+    ANNOTATION_SCALE_OPTIONS,
     annotated_image_to_jpeg_bytes,
     build_download_filename,
     draw_detections,
@@ -122,6 +123,19 @@ iou = st.slider(
     step=0.05,
     key=f"inference_iou_{media_mode}",
 )
+annotation_label = st.selectbox(
+    "Taille des annotations",
+    options=[label for label, _ in ANNOTATION_SCALE_OPTIONS],
+    index=0,
+    help=(
+        "Auto adapte l'épaisseur des boîtes et la taille du texte à la résolution. "
+        "Petite / Moyenne / Grande forcent un rendu plus compact ou plus lisible."
+    ),
+    key=f"inference_annotation_scale_{media_mode}",
+)
+annotation_scale = next(
+    key for label, key in ANNOTATION_SCALE_OPTIONS if label == annotation_label
+)
 
 device_choice, resolved_device, _resolved_label = render_device_selector(
     key_prefix=f"infer_{media_mode}",
@@ -171,6 +185,7 @@ if media_mode == "Image":
         "conf": float(conf),
         "iou": float(iou),
         "device": device_choice,
+        "annotation_scale": annotation_scale,
     }
 
     can_run = original_image is not None and bool(selected_model.weights_path)
@@ -196,7 +211,11 @@ if media_mode == "Image":
                     device_choice=device_choice,
                     model_factory=_factory,
                 )
-                annotated = draw_detections(original_image, result.detections)
+                annotated = draw_detections(
+                    original_image,
+                    result.detections,
+                    scale=annotation_scale,
+                )
         except InferenceError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
@@ -331,6 +350,7 @@ else:
         "conf": float(conf),
         "iou": float(iou),
         "device": device_choice,
+        "annotation_scale": annotation_scale,
     }
 
     can_run = video_path is not None and bool(selected_model.weights_path)
@@ -381,6 +401,7 @@ else:
                 device_choice=device_choice,
                 model_factory=_factory,
                 progress_callback=_on_progress,
+                annotation_scale=annotation_scale,
             )
         except VideoInferenceError as exc:
             st.error(str(exc))

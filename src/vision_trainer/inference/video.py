@@ -17,7 +17,7 @@ from vision_trainer.inference.predictor import (
     extract_class_names,
     normalize_ultralytics_results,
 )
-from vision_trainer.inference.render import draw_detections
+from vision_trainer.inference.render import AnnotationScale, compute_annotation_style, draw_detections
 from vision_trainer.training.device import DeviceChoice, DeviceError, cuda_oom_user_message, resolve_device
 
 SUPPORTED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv"}
@@ -104,6 +104,7 @@ def run_video_inference(
     device_choice: DeviceChoice | str = "auto",
     model_factory: Callable[[str], Any] | None = None,
     progress_callback: ProgressCallback | None = None,
+    annotation_scale: AnnotationScale | str = "auto",
 ) -> VideoInferenceResult:
     """
     Run detection on each frame and write an annotated MP4.
@@ -178,6 +179,7 @@ def run_video_inference(
             )
 
         writer = _open_video_writer(raw_output, output_fps, width, height)
+        annotation_style = compute_annotation_style(width, height, annotation_scale)
 
         while True:
             ok, frame_bgr = capture.read()
@@ -204,7 +206,12 @@ def run_video_inference(
             for detection in normalized.detections:
                 class_counts[detection.class_name] += 1
 
-            annotated = draw_detections(pil_frame, normalized.detections)
+            annotated = draw_detections(
+                pil_frame,
+                normalized.detections,
+                scale=annotation_scale,
+                style=annotation_style,
+            )
             out_bgr = cv2.cvtColor(np.asarray(annotated.convert("RGB")), cv2.COLOR_RGB2BGR)
             writer.write(out_bgr)
             frames_done += 1

@@ -18,6 +18,7 @@ from vision_trainer.inference.predictor import (
 from vision_trainer.inference.render import (
     annotated_image_to_jpeg_bytes,
     build_download_filename,
+    compute_annotation_style,
     draw_detections,
     format_detection_label,
 )
@@ -267,6 +268,27 @@ def test_load_image_rejects_unsupported_and_corrupt(tmp_path: Path) -> None:
         load_image_rgb(corrupt)
 
 
+def test_compute_annotation_style_scales_with_resolution() -> None:
+    s640 = compute_annotation_style(640, 640, "auto")
+    s1080 = compute_annotation_style(1920, 1080, "auto")
+    s4k = compute_annotation_style(3840, 2160, "auto")
+
+    assert s640.line_width == 2
+    assert s640.font_size == 22
+    assert s1080.line_width == 5
+    assert s1080.font_size == 53
+    assert s4k.line_width == 9
+    assert s4k.font_size == 105
+
+    # Larger presets grow; small stays readable (min font 12).
+    large_640 = compute_annotation_style(640, 640, "large")
+    small_tiny = compute_annotation_style(80, 60, "small")
+    assert large_640.font_size > s640.font_size
+    assert large_640.line_width >= s640.line_width
+    assert small_tiny.font_size >= 12
+    assert small_tiny.line_width >= 2
+
+
 def test_draw_detections_and_export() -> None:
     image = Image.new("RGB", (200, 150), (240, 240, 240))
     detections = [
@@ -288,3 +310,23 @@ def test_draw_detections_and_export() -> None:
     jpeg_bytes = annotated_image_to_jpeg_bytes(annotated)
     assert jpeg_bytes[:2] == b"\xff\xd8"
     assert build_download_filename("street.png") == "prediction_street.jpg"
+
+
+def test_draw_detections_respects_scale_preset() -> None:
+    image = Image.new("RGB", (1920, 1080), (240, 240, 240))
+    detections = [
+        Detection(
+            class_id=0,
+            class_name="valve",
+            confidence=0.9,
+            x1=100,
+            y1=100,
+            x2=400,
+            y2=300,
+        )
+    ]
+    small = draw_detections(image, detections, scale="small")
+    large = draw_detections(image, detections, scale="large")
+    assert small.size == large.size == image.size
+    # Different stroke/font should change some pixels near the box.
+    assert small.tobytes() != large.tobytes()

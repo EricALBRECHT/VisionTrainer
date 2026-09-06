@@ -21,6 +21,7 @@ from vision_trainer.inference.predictor import (
 from vision_trainer.inference.render import (
     annotated_image_to_jpeg_bytes,
     build_download_filename,
+    compute_annotation_style,
     draw_detections,
     format_detection_label,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "build_download_filename",
     "build_predict_kwargs",
     "build_video_output_filename",
+    "compute_annotation_style",
     "discover_trained_models",
     "draw_detections",
     "format_detection_label",
