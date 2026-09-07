@@ -23,6 +23,7 @@ services:
     image: vision-trainer:gpu
     # Docker Compose v2+ GPU access (no privileged mode).
     gpus: all
+    shm_size: "4gb"
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility

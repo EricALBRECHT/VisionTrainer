@@ -4,6 +4,7 @@ port = 8501
 headless = true
 enableCORS = false
 enableXsrfProtection = true
+maxUploadSize = 2048
 
 [browser]
 gatherUsageStats = false
