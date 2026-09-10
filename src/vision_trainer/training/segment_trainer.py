@@ -47,6 +47,8 @@ class SegmentTrainingRequest:
     device_choice: DeviceChoice | str = "auto"
     runs_root: Path | None = None
     dataset_id: str | None = None
+    dataset_source_type: str | None = None
+    dataset_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,10 @@ def prepare_segment_training_run(request: SegmentTrainingRequest) -> PreparedSeg
         }
         if request.dataset_id:
             request_payload["dataset_id"] = request.dataset_id
+        if request.dataset_source_type:
+            request_payload["dataset_source_type"] = request.dataset_source_type
+        if request.dataset_name:
+            request_payload["dataset_name"] = request.dataset_name
         write_request(run_dir, request_payload)
 
         return PreparedSegmentRun(

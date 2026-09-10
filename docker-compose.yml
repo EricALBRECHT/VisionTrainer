@@ -11,6 +11,13 @@
 #   use the named volume profile instead:
 #     docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
 #
+# External / large datasets (read-only, no browser upload):
+#   Default host path for WSL+Windows: /mnt/d/Datasets → /datasets
+#   Change the left-hand side to match your machine, e.g.:
+#     /mnt/c/Users/you/Datasets:/datasets:ro
+#     /home/you/datasets:/datasets:ro
+#   The app only sees /datasets (VISION_TRAINER_EXTERNAL_DATASETS).
+#
 # NVIDIA GPU: use the overlay file (does not replace this CPU service definition):
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 
@@ -25,6 +32,7 @@ services:
       - "8501:8501"
     environment:
       VISIONTRAINER_DATA_DIR: /app/data
+      VISION_TRAINER_EXTERNAL_DATASETS: /datasets
       YOLO_CONFIG_DIR: /app/data/ultralytics
       TMPDIR: /app/data/tmp
       STREAMLIT_SERVER_ADDRESS: "0.0.0.0"
@@ -34,4 +42,6 @@ services:
     volumes:
       # Host-persisted datasets, runs, weights, ultralytics cache, tmp uploads
       - ./data:/app/data
+      # Large external datasets (read-only). Adjust host path as needed.
+      - /mnt/c/Datasets:/datasets:ro
     restart: unless-stopped

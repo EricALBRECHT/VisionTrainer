@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from vision_trainer.datasets.external import SOURCE_UPLOADED, normalize_source_type
 from vision_trainer.segment.labels import SegmentDatasetInfo, SegmentSplitStats
 from vision_trainer.yolo.models import DatasetInfo, SplitInfo
 
@@ -16,6 +17,8 @@ def segment_dataset_to_session_payload(
     *,
     segment_info: SegmentDatasetInfo | None = None,
     dataset_id: str | None = None,
+    source_type: str = SOURCE_UPLOADED,
+    display_name: str | None = None,
 ) -> dict:
     payload: dict = {
         "task": "segment",
@@ -23,6 +26,7 @@ def segment_dataset_to_session_payload(
         "root": str(dataset.root),
         "yaml_path": str(dataset.yaml_path),
         "class_names": {int(k): v for k, v in dataset.class_names.items()},
+        "source_type": normalize_source_type(source_type),
         "splits": {},
     }
     for name, split in dataset.splits.items():
@@ -49,6 +53,8 @@ def segment_dataset_to_session_payload(
         payload["detection_label_hits"] = segment_info.detection_label_hits
     if dataset_id:
         payload["dataset_id"] = dataset_id
+    if display_name:
+        payload["display_name"] = display_name
     return payload
 
 

@@ -6,6 +6,11 @@ from pathlib import Path
 # Environment variable used in Docker and optional local overrides.
 DATA_DIR_ENV = "VISIONTRAINER_DATA_DIR"
 
+# Read-only bind-mount root for large/external datasets (container path).
+# Host path is configured in docker-compose only — never hard-code D: here.
+EXTERNAL_DATASETS_ENV = "VISION_TRAINER_EXTERNAL_DATASETS"
+DEFAULT_EXTERNAL_DATASETS_ROOT = "/datasets"
+
 
 def get_data_root() -> Path:
     """
@@ -23,6 +28,19 @@ def get_data_root() -> Path:
 
 def get_datasets_dir() -> Path:
     return get_data_root() / "datasets"
+
+
+def get_external_datasets_root() -> Path:
+    """
+    Root directory for external (mounted) datasets.
+
+    Default ``/datasets``. Override with ``VISION_TRAINER_EXTERNAL_DATASETS``.
+    The path is not created automatically (mount may be absent).
+    """
+    raw = os.environ.get(EXTERNAL_DATASETS_ENV, "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path(DEFAULT_EXTERNAL_DATASETS_ROOT)
 
 
 def get_runs_dir() -> Path:

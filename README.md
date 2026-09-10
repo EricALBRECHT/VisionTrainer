@@ -25,16 +25,38 @@ Données locales par défaut : `./artifacts/` (`datasets/`, `runs/`).
 
 ## Datasets
 
+### Petits / moyens — Import ZIP
+
+Upload navigateur → copie sous `<data_root>/datasets/<id>/extracted/`.
+
+### Gros datasets — Dossier local (externe)
+
+Aucun upload navigateur, **aucune copie** des images/labels.
+
+1. Placez le dataset sur l’hôte, ex. Windows `D:\Datasets\Cuisine`.
+2. Sous WSL : `/mnt/d/Datasets/Cuisine`.
+3. Docker monte la racine en lecture seule :
+
+```yaml
+# docker-compose.yml (chemin hôte modifiable)
+- /mnt/d/Datasets:/datasets:ro
+```
+
+4. Dans VisionTrainer → **Datasets** → **Dossier local** → choisir `Cuisine` → **Vérifier** → **Utiliser**.
+
+La racine côté conteneur est toujours `/datasets` (`VISION_TRAINER_EXTERNAL_DATASETS`).  
+Ne jamais écrire dans ce volume : YAML auto-généré éventuel → métadonnées sous `/app/data/datasets/ext-…`.
+
 ### Détection (YOLO)
 
-ZIP avec `data.yaml`, **ou** sans YAML mais avec :
+ZIP ou dossier avec `data.yaml`, **ou** sans YAML mais avec :
 
 ```text
 train/images + train/labels (+ val/…)
 train/classes.txt   # une classe par ligne
 ```
 
-Dans ce second cas, VisionTrainer génère un `data.yaml` interne (sans écraser un YAML existant).
+Dans ce second cas, VisionTrainer génère un `data.yaml` **interne** (jamais dans la source externe en lecture seule).
 
 ### Classification
 
@@ -48,7 +70,7 @@ dataset/
     ClasseB/
 ```
 
-Import ZIP sur **Classification — Dataset**. Aucune bounding box.
+Import ZIP **ou** dossier local ImageFolder. Aucune bounding box.
 
 ## Segmentation
 
@@ -69,7 +91,7 @@ dataset/
 
 Les labels sont des **polygones** normalisés. VisionTrainer **refuse** les fichiers au format détection (`class xc yc w h`) sans conversion automatique.
 
-Import ZIP sur **Segmentation — Dataset**, avec prévisualisation des polygones.
+Import ZIP **ou** dossier local sur **Datasets → Segmentation**, avec prévisualisation des polygones.
 
 ### Entraînement
 
@@ -152,13 +174,19 @@ Upload Streamlit : `maxUploadSize = 10240` (Mo, soit 10 Go) dans `.streamlit/con
 
 Bind mount `./data` → `/app/data` :
 
-- `datasets/` — ZIP importés
+- `datasets/` — ZIP importés + métadonnées externes (`ext-…`)
 - `runs/` — entraînements / `best.pt`
 - `pipelines/` — configs Détection → Classification
 - `ultralytics/` — cache
 - `tmp/` — temporaires
 
-`VISIONTRAINER_DATA_DIR=/app/data` (Docker). Hors Docker : `./artifacts`.
+Bind mount datasets externes (lecture seule) :
+
+- hôte (exemple WSL) `/mnt/d/Datasets` → conteneur `/datasets`
+
+`VISIONTRAINER_DATA_DIR=/app/data` (Docker).  
+`VISION_TRAINER_EXTERNAL_DATASETS=/datasets` (Docker).  
+Hors Docker : `./artifacts` ; racine externe configurable via la même variable d’environnement.
 
 ### Docker Desktop + WSL
 

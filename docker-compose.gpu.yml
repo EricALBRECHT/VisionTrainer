@@ -6,6 +6,9 @@
 # Optional WSL bind-mount fallback remains available:
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.wsl.yml up --build
 #
+# External datasets mount (/datasets:ro) is inherited from docker-compose.yml
+# — this overlay does not remove volumes.
+#
 # Prerequisites:
 #   - NVIDIA GPU + recent driver
 #   - Linux: NVIDIA Container Toolkit

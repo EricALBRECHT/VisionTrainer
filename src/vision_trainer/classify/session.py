@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from vision_trainer.classify.models import ClassifyClassStats, ClassifyDatasetInfo
+from vision_trainer.datasets.external import SOURCE_UPLOADED, normalize_source_type
 
 SESSION_CLS_DATASET_KEY = "validated_classify_dataset"
 
@@ -12,6 +13,8 @@ def classify_dataset_to_session_payload(
     extract_dir: Path,
     *,
     dataset_id: str | None = None,
+    source_type: str = SOURCE_UPLOADED,
+    display_name: str | None = None,
 ) -> dict:
     payload: dict = {
         "task": "classify",
@@ -21,6 +24,7 @@ def classify_dataset_to_session_payload(
         "train_image_count": dataset.train_image_count,
         "val_image_count": dataset.val_image_count,
         "test_image_count": dataset.test_image_count,
+        "source_type": normalize_source_type(source_type),
         "class_stats": {
             name: {
                 "train_count": stats.train_count,
@@ -32,6 +36,8 @@ def classify_dataset_to_session_payload(
     }
     if dataset_id:
         payload["dataset_id"] = dataset_id
+    if display_name:
+        payload["display_name"] = display_name
     return payload
 
 

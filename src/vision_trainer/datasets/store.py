@@ -59,6 +59,7 @@ def import_zip_to_persistent_dataset(
         dataset_dir / "meta.json",
         {
             "dataset_id": dataset_id,
+            "source_type": "uploaded",
             "task": normalize_task(task),
             "content_sha256": digest,
             "created_at": datetime.now(timezone.utc).isoformat(),

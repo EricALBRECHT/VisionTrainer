@@ -26,15 +26,20 @@ def validate_dataset(
     root: Path,
     *,
     containment_root: Path | None = None,
+    generated_yaml_dir: Path | None = None,
 ) -> ValidationResult:
     """Validate a YOLO dataset directory and return structured findings.
 
     When ``containment_root`` is set (ZIP imports), resolved split paths must
     remain inside that root. When ``None``, parsing keeps its prior behaviour.
+
+    ``generated_yaml_dir``: optional writable location for auto-generated YAML
+    (external read-only datasets).
     """
     dataset, parse_messages = load_dataset_from_directory(
         root,
         containment_root=containment_root,
+        generated_yaml_dir=generated_yaml_dir,
     )
     issues: list[ValidationIssue] = []
     for message in parse_messages:

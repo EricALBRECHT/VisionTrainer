@@ -24,6 +24,7 @@ def validate_segment_dataset(
     *,
     containment_root: Path | None = None,
     max_label_files_detailed: int = 5000,
+    generated_yaml_dir: Path | None = None,
 ) -> ValidationResult:
     """
     Validate a YOLO segmentation dataset.
@@ -34,6 +35,7 @@ def validate_segment_dataset(
     dataset, parse_messages = load_dataset_from_directory(
         root,
         containment_root=containment_root,
+        generated_yaml_dir=generated_yaml_dir,
     )
     issues: list[ValidationIssue] = []
     for message in parse_messages:

@@ -99,13 +99,26 @@ def generate_data_yaml_from_layout(
     class_names: list[str],
     destination: Path | None = None,
 ) -> Path:
-    """Write an internal data.yaml for a folder layout (never overwrites existing)."""
+    """Write an internal data.yaml for a folder layout (never overwrites existing).
+
+    When ``destination`` is outside ``layout_root`` (external / read-only datasets),
+    ``path`` points at the absolute layout root so splits resolve correctly without
+    writing into the source tree.
+    """
     target = destination if destination is not None else layout_root / "data.yaml"
     if target.is_file() and destination is None:
         return target
 
+    layout_resolved = layout_root.resolve()
+    use_absolute_path = destination is not None
+    if use_absolute_path:
+        try:
+            use_absolute_path = target.resolve().parent != layout_resolved
+        except OSError:
+            use_absolute_path = True
+
     payload: dict[str, Any] = {
-        "path": ".",
+        "path": str(layout_resolved) if use_absolute_path else ".",
         "train": "train/images",
         "names": {index: name for index, name in enumerate(class_names)},
     }
@@ -122,10 +135,17 @@ def generate_data_yaml_from_layout(
     return target
 
 
-def ensure_data_yaml_for_layout(root: Path) -> tuple[Path | None, str | None]:
+def ensure_data_yaml_for_layout(
+    root: Path,
+    *,
+    generated_yaml_dir: Path | None = None,
+) -> tuple[Path | None, str | None]:
     """
     If data.yaml is missing but train/images+labels and classes.txt exist,
     generate an internal data.yaml. Existing YAML is never overwritten.
+
+    When ``generated_yaml_dir`` is set, the YAML is written there (for read-only
+    external datasets) instead of inside the dataset tree.
     """
     existing = find_data_yaml(root)
     if existing is not None:
@@ -143,7 +163,16 @@ def ensure_data_yaml_for_layout(root: Path) -> tuple[Path | None, str | None]:
     if not names:
         return None, None
 
-    yaml_path = generate_data_yaml_from_layout(layout, class_names=names)
+    if generated_yaml_dir is not None:
+        destination = generated_yaml_dir / "data.generated.yaml"
+    else:
+        destination = None
+
+    yaml_path = generate_data_yaml_from_layout(
+        layout,
+        class_names=names,
+        destination=destination,
+    )
     try:
         rel = classes_path.relative_to(layout)
     except ValueError:
@@ -239,6 +268,7 @@ def load_dataset_from_directory(
     root: Path,
     *,
     containment_root: Path | None = None,
+    generated_yaml_dir: Path | None = None,
 ) -> tuple[DatasetInfo | None, list[str]]:
     """
     Parse data.yaml and build dataset metadata.
@@ -250,11 +280,17 @@ def load_dataset_from_directory(
     If data.yaml is absent but train/images+labels and classes.txt are present,
     an internal data.yaml is generated (existing YAML is never overwritten).
     Soft informational messages may be returned alongside hard errors.
+
+    ``generated_yaml_dir``: write auto-generated YAML there (external RO datasets)
+    instead of inside ``root``.
     """
     infos: list[str] = []
     yaml_path = find_data_yaml(root)
     if yaml_path is None:
-        yaml_path, generated_msg = ensure_data_yaml_for_layout(root)
+        yaml_path, generated_msg = ensure_data_yaml_for_layout(
+            root,
+            generated_yaml_dir=generated_yaml_dir,
+        )
         if generated_msg:
             infos.append(generated_msg)
     if yaml_path is None:

@@ -6,11 +6,14 @@
 #
 # Data then lives in the Docker volume `vision-trainer-data`
 # (inspect with: docker volume inspect vision-trainer-data).
+#
+# Keeps the external datasets mount from docker-compose.yml (/datasets:ro).
 
 services:
   vision-trainer:
     volumes:
       - vision-trainer-data:/app/data
+      - /mnt/d/Datasets:/datasets:ro
 
 volumes:
   vision-trainer-data:

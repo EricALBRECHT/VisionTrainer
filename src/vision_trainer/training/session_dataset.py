@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from vision_trainer.datasets.external import SOURCE_UPLOADED, normalize_source_type
 from vision_trainer.yolo.models import DatasetInfo, SplitInfo
 
 
@@ -13,6 +14,8 @@ def dataset_to_session_payload(
     extract_dir: Path,
     *,
     dataset_id: str | None = None,
+    source_type: str = SOURCE_UPLOADED,
+    display_name: str | None = None,
 ) -> dict:
     """Serialize a validated dataset for Streamlit session_state."""
     splits: dict[str, dict] = {}
@@ -28,9 +31,12 @@ def dataset_to_session_payload(
         "yaml_path": str(dataset.yaml_path),
         "class_names": {int(key): value for key, value in dataset.class_names.items()},
         "splits": splits,
+        "source_type": normalize_source_type(source_type),
     }
     if dataset_id:
         payload["dataset_id"] = dataset_id
+    if display_name:
+        payload["display_name"] = display_name
     return payload
 
 

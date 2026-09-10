@@ -183,7 +183,21 @@ def render() -> None:
     dataset = None
     if payload:
         try:
-            dataset = segment_dataset_from_session_payload(payload)
+            from vision_trainer.datasets.external import (
+                SOURCE_EXTERNAL,
+                assert_external_dataset_accessible,
+                normalize_source_type,
+                source_type_label_fr,
+            )
+
+            if normalize_source_type(payload.get("source_type")) == SOURCE_EXTERNAL:
+                try:
+                    assert_external_dataset_accessible(Path(payload["root"]))
+                except Exception as exc:
+                    st.error(str(exc))
+                    payload = None
+            if payload:
+                dataset = segment_dataset_from_session_payload(payload)
         except (KeyError, TypeError, ValueError) as exc:
             st.error(
                 f"Dataset segmentation en session invalide : {exc}. "
@@ -198,7 +212,14 @@ def render() -> None:
                 "Importez-en un sur **Datasets** (mode Segmentation)."
             )
     else:
+        from vision_trainer.datasets.external import source_type_label_fr
+
         st.subheader("Dataset")
+        name = payload.get("display_name") or payload.get("dataset_id")
+        if name:
+            st.write(
+                f"**{name}**  ·  `{source_type_label_fr(payload.get('source_type'))}`"
+            )
         train_n = dataset.splits["train"].image_count if "train" in dataset.splits else 0
         val_n = dataset.splits["val"].image_count if "val" in dataset.splits else 0
         col_a, col_b, col_c, col_d = st.columns(4)
@@ -271,6 +292,8 @@ def render() -> None:
             device_choice=device_choice,
             runs_root=ARTIFACTS_RUNS_DIR,
             dataset_id=(payload or {}).get("dataset_id"),
+            dataset_source_type=(payload or {}).get("source_type"),
+            dataset_name=(payload or {}).get("display_name"),
         )
         try:
             with st.spinner("Préparation du run…"):
