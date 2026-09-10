@@ -23,6 +23,10 @@ st.markdown(
     2. **Classification — Entraînement** — YOLO11-cls
     3. **Inférence** — mode Classification (Top-N, seuil *Inconnu*)
 
+    ### Pipeline (Détection → Classification)
+    1. **Pipelines** — associer un classificateur à certaines classes détectées
+    2. **Inférence Pipeline** — image → détection → crop → classification optionnelle
+
     ### Commun
     - **Résultats** — historique détection **et** classification
     - **Stockage** — datasets, runs, modèles

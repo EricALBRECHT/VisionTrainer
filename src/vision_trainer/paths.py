@@ -34,3 +34,15 @@ def get_tmp_dir() -> Path:
     path = get_data_root() / "tmp"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def get_pipelines_dir() -> Path:
+    """Persistent directory for detection→classification pipeline configs."""
+    path = get_data_root() / "pipelines"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_run_dir(run_id: str) -> Path:
+    """Return the directory for a single training run under the data root."""
+    return get_runs_dir() / run_id

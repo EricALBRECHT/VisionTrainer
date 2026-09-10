@@ -57,6 +57,24 @@ Sur la page Inférence (mode Classification) :
 
 Ce n’est **pas** une détection OOD formelle.
 
+## Pipelines
+
+Chaînage optionnel **Détection → Classification** (classe par classe) :
+
+1. Entraîner un détecteur (ex. `Apple`, `Tomato`, `Carrot`)
+2. Entraîner un ou plusieurs classificateurs (ex. Golden / Gala / Granny Smith)
+3. Page **Pipelines** : choisir le détecteur, cocher les classes à affiner, associer un classificateur + seuils
+4. Page **Inférence Pipeline** : lancer une image
+
+Fonctionnement :
+
+- détection sur l’image originale ;
+- pour chaque objet d’une classe affinée : **crop** de la bbox (avec padding optionnel, défaut 5 %) ;
+- classification du crop avec la logique V1 (`INCONNU` / `INCERTAIN`) ;
+- les classes non affinées restent des détections simples (`Carrot 93 %`).
+
+Stockage : `pipelines/*.json` sous le data root (`VISIONTRAINER_DATA_DIR` ou `./artifacts`). Les fichiers référencent des **run id** (pas les poids embarqués), ce qui reste portable après redémarrage Docker.
+
 ## Lancement avec Docker
 
 Prérequis : Docker et Docker Compose.
@@ -75,6 +93,7 @@ Bind mount `./data` → `/app/data` :
 
 - `datasets/` — ZIP importés
 - `runs/` — entraînements / `best.pt`
+- `pipelines/` — configs Détection → Classification
 - `ultralytics/` — cache
 - `tmp/` — temporaires
 
