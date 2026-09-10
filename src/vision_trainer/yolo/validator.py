@@ -32,13 +32,18 @@ def validate_dataset(
     When ``containment_root`` is set (ZIP imports), resolved split paths must
     remain inside that root. When ``None``, parsing keeps its prior behaviour.
     """
-    dataset, parse_errors = load_dataset_from_directory(
+    dataset, parse_messages = load_dataset_from_directory(
         root,
         containment_root=containment_root,
     )
-    issues: list[ValidationIssue] = [
-        ValidationIssue(Severity.ERROR, message) for message in parse_errors
-    ]
+    issues: list[ValidationIssue] = []
+    for message in parse_messages:
+        if dataset is None:
+            issues.append(ValidationIssue(Severity.ERROR, message))
+        elif message.startswith("data.yaml généré"):
+            issues.append(ValidationIssue(Severity.INFO, message))
+        else:
+            issues.append(ValidationIssue(Severity.WARNING, message))
 
     if dataset is None:
         return ValidationResult(dataset=None, issues=issues)

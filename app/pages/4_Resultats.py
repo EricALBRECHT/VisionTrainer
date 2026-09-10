@@ -12,17 +12,18 @@ from vision_trainer.results.catalog import (
     load_run,
 )
 from vision_trainer.results.models import SESSION_INFERENCE_WEIGHTS_KEY
+from vision_trainer.tasks import task_label_fr
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 
 st.set_page_config(page_title="Résultats — Vision Trainer", layout="wide")
 st.title("Résultats")
-st.markdown("Consultez les entraînements déjà réalisés dans `artifacts/runs/`.")
+st.markdown("Consultez les entraînements (détection et classification) dans les runs.")
 
 runs = discover_runs(ARTIFACTS_RUNS_DIR)
 if not runs:
     st.info(
-        "Aucun run trouvé. Lancez un entraînement depuis la page **Entraînement** "
-        "pour générer des résultats ici."
+        "Aucun run trouvé. Lancez un entraînement depuis **Entraînement** "
+        "ou **Classification — Entraînement**."
     )
     st.stop()
 
@@ -31,7 +32,9 @@ for summary in runs:
     date_label = summary.started_at or summary.finished_at or "date inconnue"
     if summary.started_at and "T" in summary.started_at:
         date_label = summary.started_at.split("T", 1)[0]
-    labels.append(f"{summary.run_id} — {summary.state} — {date_label}")
+    labels.append(
+        f"{summary.run_id} — {task_label_fr(summary.task)} — {summary.state} — {date_label}"
+    )
 
 st.subheader("Entraînements")
 selected_label = st.selectbox("Sélectionner un run", options=labels)
@@ -43,6 +46,7 @@ with st.expander("Liste compacte de tous les runs", expanded=False):
         [
             {
                 "run_id": item.run_id,
+                "type": task_label_fr(item.task),
                 "état": item.state,
                 "date": (item.started_at or item.finished_at or "Non disponible"),
                 "durée": format_duration(item.duration_seconds),
@@ -74,6 +78,7 @@ col_cfg, col_metrics, col_weights = st.columns(3)
 
 with col_cfg:
     st.markdown("#### Configuration")
+    st.write(f"- Type : **{task_label_fr(summary.task)}**")
     st.write(f"- Modèle : `{format_optional(summary.model)}`")
     st.write(f"- Epochs : {format_optional(summary.epochs)}")
     st.write(f"- imgsz : {format_optional(summary.imgsz)}")
@@ -85,10 +90,14 @@ with col_cfg:
 
 with col_metrics:
     st.markdown("#### Résultats")
-    st.write(f"- Precision : {format_optional(detail.precision, percent=True)}")
-    st.write(f"- Recall : {format_optional(detail.recall, percent=True)}")
-    st.write(f"- mAP50 : {format_optional(detail.map50, percent=True)}")
-    st.write(f"- mAP50-95 : {format_optional(detail.map50_95, percent=True)}")
+    if summary.task == "classify":
+        st.write(f"- Accuracy Top-1 : {format_optional(detail.accuracy_top1, percent=True)}")
+        st.write(f"- Accuracy Top-5 : {format_optional(detail.accuracy_top5, percent=True)}")
+    else:
+        st.write(f"- Precision : {format_optional(detail.precision, percent=True)}")
+        st.write(f"- Recall : {format_optional(detail.recall, percent=True)}")
+        st.write(f"- mAP50 : {format_optional(detail.map50, percent=True)}")
+        st.write(f"- mAP50-95 : {format_optional(detail.map50_95, percent=True)}")
 
 with col_weights:
     st.markdown("#### Modèles")
@@ -106,7 +115,7 @@ if detail.best_pt is not None and summary.state in {"terminé", "completed", "in
             )
 
 history = load_metrics_history(summary.run_dir)
-if history is not None and (history.has_map50 or history.has_map50_95):
+if summary.task != "classify" and history is not None and (history.has_map50 or history.has_map50_95):
     st.subheader("Courbes d'entraînement (results.csv)")
     rows: list[dict] = []
     for index, epoch in enumerate(history.epochs):
@@ -119,6 +128,8 @@ if history is not None and (history.has_map50 or history.has_map50_95):
     y_cols = [key for key in ("mAP50", "mAP50-95") if any(key in row for row in rows)]
     if y_cols:
         st.line_chart(rows, x="epoch", y=y_cols)
+elif summary.task == "classify":
+    st.caption("Métriques détection (mAP) non applicables à la classification.")
 elif history is None:
     st.caption("Pas de `results.csv` pour ce run.")
 else:

@@ -28,11 +28,13 @@ def import_zip_to_persistent_dataset(
     *,
     datasets_root: Path | None = None,
     content_hash: str | None = None,
+    task: str = "detect",
 ) -> tuple[str, Path]:
     """
-    Persist an uploaded YOLO ZIP under ``<data_root>/datasets/<dataset_id>/extracted``.
+    Persist an uploaded ZIP under ``<data_root>/datasets/<dataset_id>/extracted``.
 
     Returns (dataset_id, extract_dir). Does not delete previous datasets.
+    ``task`` is stored in meta.json for later discovery (detect|classify|…).
     """
     root = datasets_root if datasets_root is not None else get_datasets_dir()
     digest = content_hash or hashlib.sha256(zip_bytes).hexdigest()
@@ -51,10 +53,13 @@ def import_zip_to_persistent_dataset(
         # Keep the failed folder for inspection; re-raise for the UI.
         raise
 
+    from vision_trainer.tasks import normalize_task
+
     atomic_write_json(
         dataset_dir / "meta.json",
         {
             "dataset_id": dataset_id,
+            "task": normalize_task(task),
             "content_sha256": digest,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "extract_dir": str(extract_dir.resolve()),

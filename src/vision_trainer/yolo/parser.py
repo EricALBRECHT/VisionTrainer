@@ -23,7 +23,13 @@ class ZipExtractionError(Exception):
 
 
 def find_data_yaml(root: Path) -> Path | None:
-    """Return the first data.yaml found at root or one level below."""
+    """
+    Return the first data.yaml found under ``root``.
+
+    Search order: ``root/data.yaml``, then each direct child, then a shallow
+    recursive fallback (depth ≤ 3) for ZIPs with an extra nesting level.
+    """
+    root = root.resolve()
     direct = root / "data.yaml"
     if direct.is_file():
         return direct
@@ -33,7 +39,120 @@ def find_data_yaml(root: Path) -> Path | None:
             candidate = child / "data.yaml"
             if candidate.is_file():
                 return candidate
+
+    for path in sorted(root.rglob("data.yaml")):
+        try:
+            depth = len(path.relative_to(root).parts)
+        except ValueError:
+            continue
+        if depth <= 3 and path.is_file():
+            return path
     return None
+
+
+def find_yolo_layout_root(root: Path) -> Path | None:
+    """Find a YOLO detect layout root (train/images + train/labels)."""
+    root = root.resolve()
+    candidates: list[Path] = [root]
+    for child in sorted(root.iterdir()):
+        if child.is_dir() and not child.name.startswith("."):
+            candidates.append(child)
+            for grand in sorted(child.iterdir()):
+                if grand.is_dir() and not grand.name.startswith("."):
+                    candidates.append(grand)
+
+    for candidate in candidates:
+        if _has_yolo_split_dirs(candidate, "train"):
+            return candidate
+    return None
+
+
+def _has_yolo_split_dirs(base: Path, split: str) -> bool:
+    return (base / split / "images").is_dir() and (base / split / "labels").is_dir()
+
+
+def find_classes_txt(layout_root: Path) -> Path | None:
+    """Prefer train/classes.txt, then val/, then layout root."""
+    for candidate in (
+        layout_root / "train" / "classes.txt",
+        layout_root / "val" / "classes.txt",
+        layout_root / "classes.txt",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def parse_classes_txt(path: Path) -> list[str]:
+    names: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        name = line.strip()
+        if not name or name.startswith("#"):
+            continue
+        names.append(name)
+    return names
+
+
+def generate_data_yaml_from_layout(
+    layout_root: Path,
+    *,
+    class_names: list[str],
+    destination: Path | None = None,
+) -> Path:
+    """Write an internal data.yaml for a folder layout (never overwrites existing)."""
+    target = destination if destination is not None else layout_root / "data.yaml"
+    if target.is_file() and destination is None:
+        return target
+
+    payload: dict[str, Any] = {
+        "path": ".",
+        "train": "train/images",
+        "names": {index: name for index, name in enumerate(class_names)},
+    }
+    if _has_yolo_split_dirs(layout_root, "val"):
+        payload["val"] = "val/images"
+    if _has_yolo_split_dirs(layout_root, "test"):
+        payload["test"] = "test/images"
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return target
+
+
+def ensure_data_yaml_for_layout(root: Path) -> tuple[Path | None, str | None]:
+    """
+    If data.yaml is missing but train/images+labels and classes.txt exist,
+    generate an internal data.yaml. Existing YAML is never overwritten.
+    """
+    existing = find_data_yaml(root)
+    if existing is not None:
+        return existing, None
+
+    layout = find_yolo_layout_root(root)
+    if layout is None or not _has_yolo_split_dirs(layout, "train"):
+        return None, None
+
+    classes_path = find_classes_txt(layout)
+    if classes_path is None:
+        return None, None
+
+    names = parse_classes_txt(classes_path)
+    if not names:
+        return None, None
+
+    yaml_path = generate_data_yaml_from_layout(layout, class_names=names)
+    try:
+        rel = classes_path.relative_to(layout)
+    except ValueError:
+        rel = classes_path.name
+    message = (
+        f"data.yaml généré automatiquement depuis `{rel}` "
+        f"({len(names)} classe(s)) → `{yaml_path}`."
+    )
+    return yaml_path, message
 
 
 def extract_zip_dataset(zip_path: Path, destination: Path) -> Path:
@@ -127,23 +246,32 @@ def load_dataset_from_directory(
     When ``containment_root`` is set (ZIP imports), resolved ``path``/split directories
     must remain inside that root. Roboflow ``../train/images`` fallbacks that land
     inside the extract root remain allowed.
+
+    If data.yaml is absent but train/images+labels and classes.txt are present,
+    an internal data.yaml is generated (existing YAML is never overwritten).
+    Soft informational messages may be returned alongside hard errors.
     """
+    infos: list[str] = []
     yaml_path = find_data_yaml(root)
     if yaml_path is None:
-        return None, ["data.yaml introuvable dans le dataset."]
+        yaml_path, generated_msg = ensure_data_yaml_for_layout(root)
+        if generated_msg:
+            infos.append(generated_msg)
+    if yaml_path is None:
+        return None, ["data.yaml introuvable dans le dataset."] + infos
 
     try:
         raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
-        return None, [f"data.yaml illisible : {exc}"]
+        return None, [f"data.yaml illisible : {exc}"] + infos
 
     if not isinstance(raw, dict):
-        return None, ["data.yaml doit contenir un mapping YAML."]
+        return None, ["data.yaml doit contenir un mapping YAML."] + infos
 
     errors: list[str] = []
     class_names = _parse_class_names(raw.get("names"), errors)
     if class_names is None:
-        return None, errors
+        return None, errors + infos
 
     yaml_dir = yaml_path.parent.resolve()
     containment = containment_root.resolve() if containment_root is not None else None
@@ -159,7 +287,7 @@ def load_dataset_from_directory(
     if containment is not None and not _is_within_root(dataset_root, containment):
         return None, [
             f"Le chemin 'path' sort de la racine du dataset extrait : {dataset_root}"
-        ]
+        ] + infos
 
     splits = _parse_splits(
         raw,
@@ -170,7 +298,7 @@ def load_dataset_from_directory(
     )
 
     if errors:
-        return None, errors
+        return None, errors + infos
 
     info = DatasetInfo(
         root=dataset_root,
@@ -178,7 +306,7 @@ def load_dataset_from_directory(
         class_names=class_names,
         splits=splits,
     )
-    return info, []
+    return info, infos
 
 
 def _parse_class_names(names_raw: Any, errors: list[str]) -> dict[int, str] | None:

@@ -12,13 +12,20 @@ from vision_trainer.yolo.validator import validate_dataset
 from vision_trainer.yolo.visualization import ImagePreviewError, collect_sample_images, draw_annotations
 
 st.set_page_config(page_title="Dataset — Vision Trainer", layout="wide")
-st.title("Dataset YOLO")
-st.markdown("Chargez un dataset YOLO (ZIP) pour l'analyser et le valider.")
+st.title("Dataset YOLO (détection)")
+st.markdown(
+    "Chargez un dataset YOLO (ZIP) pour l'analyser et le valider. "
+    "Pour la **classification** (dossiers de classes sans bounding boxes), "
+    "utilisez la page **Classification — Dataset**."
+)
 
 uploaded_file = st.file_uploader(
     "Fichier ZIP du dataset",
     type=["zip"],
-    help="Le ZIP doit contenir un fichier data.yaml à la racine ou dans un sous-dossier.",
+    help=(
+        "Le ZIP doit contenir un data.yaml, ou bien "
+        "train/images + train/labels (+ val/…) avec un classes.txt."
+    ),
 )
 
 # Allow viewing the last validated persistent dataset without re-upload.

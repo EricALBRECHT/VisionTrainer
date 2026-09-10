@@ -7,6 +7,7 @@ from pathlib import Path
 import streamlit as st
 from PIL import Image
 
+from vision_trainer.classify.predictor import run_classify_inference
 from vision_trainer.inference.discovery import discover_trained_models
 from vision_trainer.inference.predictor import (
     DEFAULT_CONF,
@@ -40,13 +41,21 @@ from vision_trainer.ui.device_selector import render_device_selector
 
 st.set_page_config(page_title="Inférence — Vision Trainer", layout="wide")
 st.title("Inférence")
-st.markdown("Testez un modèle entraîné sur une image ou une vidéo.")
+st.markdown("Testez un modèle entraîné (détection ou classification).")
 
-models = discover_trained_models(ARTIFACTS_RUNS_DIR)
+infer_task = st.radio(
+    "Type de modèle",
+    options=["Détection", "Classification"],
+    horizontal=True,
+    key="inference_task_mode",
+)
+task_key = "detect" if infer_task == "Détection" else "classify"
+
+models = discover_trained_models(ARTIFACTS_RUNS_DIR, task=task_key)
 if not models:
     st.warning(
-        "Aucun modèle entraîné disponible. "
-        "Lancez un entraînement jusqu'à obtenir `weights/best.pt` dans `artifacts/runs/`."
+        f"Aucun modèle de **{infer_task.lower()}** disponible (`weights/best.pt`). "
+        "Lancez un entraînement correspondant d'abord."
     )
     st.stop()
 
@@ -103,9 +112,134 @@ def _format_duration(seconds: float | None) -> str:
     return f"{minutes} min {secs:02d} s"
 
 
-media_mode = st.radio("Type de média", options=["Image", "Vidéo"], horizontal=True)
+media_mode = "Image"
+if task_key == "detect":
+    media_mode = st.radio("Type de média", options=["Image", "Vidéo"], horizontal=True)
 
 st.subheader("Paramètres")
+
+if task_key == "classify":
+    min_confidence = st.slider(
+        "Seuil de confiance minimum",
+        min_value=0.05,
+        max_value=0.99,
+        value=0.80,
+        step=0.05,
+        help=(
+            "Si le score Top-1 est inférieur à ce seuil, le résultat est "
+            "INCONNU / CONFIANCE INSUFFISANTE. Ce n'est pas une détection OOD formelle."
+        ),
+        key="cls_min_confidence",
+    )
+    min_margin = st.slider(
+        "Écart minimum Top-1 / Top-2",
+        min_value=0.0,
+        max_value=0.50,
+        value=0.10,
+        step=0.01,
+        help="Si Top-1 − Top-2 est inférieur à cet écart, le résultat est INCERTAIN.",
+        key="cls_min_margin",
+    )
+    top_n = st.slider(
+        "Top-N",
+        min_value=1,
+        max_value=10,
+        value=5,
+        step=1,
+        key="cls_top_n",
+    )
+    st.caption(
+        "Le seuil et l'écart Top-1/Top-2 sont des garde-fous simples. "
+        "Ils ne garantissent pas de détecter toutes les images hors distribution (OOD)."
+    )
+    device_choice, resolved_device, _resolved_label = render_device_selector(
+        key_prefix="infer_classify",
+        default_choice="auto",
+    )
+
+    uploaded = st.file_uploader(
+        "Image à classifier",
+        type=["jpg", "jpeg", "png", "webp"],
+        help="Formats acceptés : JPG, JPEG, PNG, WEBP.",
+    )
+    if uploaded is None:
+        st.info("Chargez une image pour tester le classificateur.")
+        st.stop()
+
+    original_name = display_upload_name(uploaded.name)
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+        st.error("Format d'image non supporté.")
+        st.stop()
+
+    temp_dir = _ensure_temp_dir()
+    image_path = safe_internal_upload_path(temp_dir, original_name)
+    image_path.write_bytes(uploaded.getvalue())
+    try:
+        original_image = load_image_rgb(image_path)
+    except InferenceError as exc:
+        st.error(str(exc))
+        st.stop()
+
+    st.image(original_image, caption=original_name, use_container_width=True)
+
+    if st.button("Lancer l'inférence", type="primary"):
+        try:
+            with st.spinner("Classification…"):
+                cached_model = _load_yolo_model(selected_model.weights_path)
+
+                def _factory(_path: str):
+                    return cached_model
+
+                result = run_classify_inference(
+                    weights_path=selected_model.weights_path,
+                    image=original_image,
+                    device_choice=device_choice,
+                    min_confidence=float(min_confidence),
+                    min_margin=float(min_margin),
+                    top_n=int(top_n),
+                    model_factory=_factory,
+                )
+        except InferenceError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Erreur inattendue : {exc}")
+        else:
+            decision = result.decision
+            st.subheader("Résultat")
+            if decision.kind == "accepted":
+                st.success(
+                    f"**Classe principale :** {decision.label} — "
+                    f"{decision.top1.confidence * 100:.1f} %"
+                    if decision.top1
+                    else f"**Classe principale :** {decision.label}"
+                )
+            elif decision.kind == "uncertain":
+                st.warning(f"**{decision.label}**")
+                if decision.reason:
+                    st.caption(decision.reason)
+            else:
+                st.error(f"**{decision.label}**")
+                if decision.reason:
+                    st.caption(decision.reason)
+
+            st.markdown("#### Top-N")
+            rows = [
+                {
+                    "Classe": score.class_name,
+                    "Score": f"{score.confidence * 100:.1f} %",
+                }
+                for score in decision.top_n
+            ]
+            if rows:
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucune probabilité disponible.")
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# Détection (image / vidéo) — comportement historique
+# ---------------------------------------------------------------------------
 default_conf = DEFAULT_CONF if media_mode == "Image" else VIDEO_DEFAULT_CONF
 conf = st.slider(
     "Seuil de confiance",

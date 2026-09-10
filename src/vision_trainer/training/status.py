@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from vision_trainer.io_utils import atomic_write_json
+from vision_trainer.tasks import DEFAULT_TASK, TaskType, normalize_task
 
 
 STATUS_FILENAME = "status.json"
@@ -41,6 +42,8 @@ class RunMetrics:
     recall: float | None = None
     map50: float | None = None
     map50_95: float | None = None
+    accuracy_top1: float | None = None
+    accuracy_top5: float | None = None
 
 
 @dataclass
@@ -61,6 +64,7 @@ class RunStatus:
     error_message: str | None = None
     pid: int | None = None
     metrics: RunMetrics = field(default_factory=RunMetrics)
+    task: TaskType = DEFAULT_TASK
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -74,6 +78,8 @@ class RunStatus:
             recall=_as_optional_float(metrics_raw.get("recall")),
             map50=_as_optional_float(metrics_raw.get("map50")),
             map50_95=_as_optional_float(metrics_raw.get("map50_95")),
+            accuracy_top1=_as_optional_float(metrics_raw.get("accuracy_top1")),
+            accuracy_top5=_as_optional_float(metrics_raw.get("accuracy_top5")),
         )
         return cls(
             run_id=str(data["run_id"]),
@@ -92,6 +98,7 @@ class RunStatus:
             error_message=data.get("error_message"),
             pid=int(data["pid"]) if data.get("pid") is not None else None,
             metrics=metrics,
+            task=normalize_task(data.get("task")),
         )
 
 
@@ -344,7 +351,7 @@ def read_log_tail(run_dir: Path, max_lines: int = 40) -> str:
 
 
 def extract_metrics_from_trainer(trainer: Any) -> RunMetrics:
-    """Best-effort extraction of final detection metrics from an Ultralytics trainer."""
+    """Best-effort extraction of Ultralytics trainer metrics (detect or classify)."""
     raw: dict[str, Any] = {}
     metrics_obj = getattr(trainer, "metrics", None)
     if isinstance(metrics_obj, dict):
@@ -359,12 +366,37 @@ def extract_metrics_from_trainer(trainer: Any) -> RunMetrics:
             raw.setdefault("metrics/recall(B)", getattr(box, "mr", None))
             raw.setdefault("metrics/mAP50(B)", getattr(box, "map50", None))
             raw.setdefault("metrics/mAP50-95(B)", getattr(box, "map", None))
+        for key in ("top1", "top5", "accuracy_top1", "accuracy_top5"):
+            if hasattr(metrics_obj, key):
+                raw.setdefault(f"metrics/{key}", getattr(metrics_obj, key))
 
     return RunMetrics(
         precision=_first_metric(raw, ("metrics/precision(B)", "precision", "precision(B)")),
         recall=_first_metric(raw, ("metrics/recall(B)", "recall", "recall(B)")),
         map50=_first_metric(raw, ("metrics/mAP50(B)", "mAP50", "map50")),
         map50_95=_first_metric(raw, ("metrics/mAP50-95(B)", "mAP50-95", "map", "map50_95")),
+        accuracy_top1=_first_metric(
+            raw,
+            (
+                "metrics/accuracy_top1",
+                "metrics/top1",
+                "accuracy_top1",
+                "top1",
+                "train/accuracy_top1",
+                "val/accuracy_top1",
+            ),
+        ),
+        accuracy_top5=_first_metric(
+            raw,
+            (
+                "metrics/accuracy_top5",
+                "metrics/top5",
+                "accuracy_top5",
+                "top5",
+                "train/accuracy_top5",
+                "val/accuracy_top5",
+            ),
+        ),
     )
 
 

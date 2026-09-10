@@ -40,6 +40,7 @@ class RunSummary:
     has_last: bool = False
     has_status: bool = False
     load_warning: str | None = None
+    task: str = "detect"
 
 
 @dataclass
@@ -49,6 +50,8 @@ class RunDetail:
     recall: float | None = None
     map50: float | None = None
     map50_95: float | None = None
+    accuracy_top1: float | None = None
+    accuracy_top5: float | None = None
     best_pt: Path | None = None
     last_pt: Path | None = None
     plots: dict[str, Path] = field(default_factory=dict)

@@ -14,6 +14,7 @@ from vision_trainer.results.models import (
     RunDetail,
     RunSummary,
 )
+from vision_trainer.tasks import normalize_task
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 from vision_trainer.training.status import request_path, status_path
 
@@ -58,6 +59,7 @@ def load_run(run_dir: Path) -> RunDetail:
     """Load full detail for one run directory (tolerant to missing artifacts)."""
     summary = _load_run_summary(run_dir)
     precision = recall = map50 = map50_95 = None
+    accuracy_top1 = accuracy_top5 = None
     error_message = summary.load_warning
     status_data = _safe_read_status_dict(run_dir)
 
@@ -68,6 +70,8 @@ def load_run(run_dir: Path) -> RunDetail:
             recall = _as_float(metrics.get("recall"))
             map50 = _as_float(metrics.get("map50"))
             map50_95 = _as_float(metrics.get("map50_95"))
+            accuracy_top1 = _as_float(metrics.get("accuracy_top1"))
+            accuracy_top5 = _as_float(metrics.get("accuracy_top5"))
         error_message = status_data.get("error_message") or error_message
 
     best = run_dir / "weights" / "best.pt"
@@ -85,6 +89,8 @@ def load_run(run_dir: Path) -> RunDetail:
         recall=recall,
         map50=map50,
         map50_95=map50_95,
+        accuracy_top1=accuracy_top1,
+        accuracy_top5=accuracy_top5,
         best_pt=best if best.is_file() else None,
         last_pt=last if last.is_file() else None,
         plots=plots,
@@ -226,6 +232,7 @@ def _load_run_summary(run_dir: Path) -> RunSummary:
         state = "incomplet"
 
     num_classes = _read_num_classes(run_dir)
+    task = _read_task(run_dir, status_data)
 
     return RunSummary(
         run_id=run_id,
@@ -244,7 +251,17 @@ def _load_run_summary(run_dir: Path) -> RunSummary:
         has_last=has_last,
         has_status=has_status,
         load_warning=load_warning,
+        task=task,
     )
+
+
+def _read_task(run_dir: Path, status_data: dict[str, Any] | None) -> str:
+    if status_data and status_data.get("task"):
+        return normalize_task(str(status_data.get("task")))
+    request_data = _safe_read_request_dict(run_dir)
+    if request_data and request_data.get("task"):
+        return normalize_task(str(request_data.get("task")))
+    return normalize_task(None)
 
 
 def _safe_read_status_dict(run_dir: Path) -> dict[str, Any] | None:

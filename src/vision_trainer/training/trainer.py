@@ -26,6 +26,7 @@ from vision_trainer.training.status import (
     write_status,
 )
 from vision_trainer.yolo.models import DatasetInfo
+from vision_trainer.tasks import normalize_task
 
 AVAILABLE_MODELS: dict[str, str] = {
     "YOLO11n": "yolo11n.pt",
@@ -179,11 +180,13 @@ def prepare_training_run(request: TrainingRequest) -> PreparedRun:
             batch=int(request.batch),
             device=device,
             progress_percent=0.0,
+            task="detect",
         )
         write_status(run_dir, status)
 
         request_payload = {
             "run_id": run_id,
+            "task": "detect",
             "model_key": request.model_key,
             "weights_name": weights_name,
             "epochs": int(request.epochs),
@@ -291,6 +294,8 @@ def execute_training_from_run_dir(
         return status
 
     request = read_request(run_dir)
+    task = normalize_task(request.get("task") or status.task)
+    status.task = task
 
     status.state = "running"
     status.pid = status.pid or os_getpid()
@@ -301,14 +306,31 @@ def execute_training_from_run_dir(
     write_status(run_dir, status)
 
     weights_name = str(request["weights_name"])
-    train_kwargs = build_train_kwargs(
-        data_yaml=Path(request["data_yaml"]),
-        run_dir=run_dir,
-        epochs=int(request["epochs"]),
-        imgsz=int(request["imgsz"]),
-        batch=int(request["batch"]),
-        device=str(request["device"]),
-    )
+    if task == "classify":
+        from vision_trainer.training.classify_trainer import build_classify_train_kwargs
+
+        data_dir = Path(str(request.get("data_dir") or request.get("data_yaml") or ""))
+        if not data_dir.is_dir():
+            message = f"Dossier dataset classification introuvable : {data_dir}"
+            _mark_failed(run_dir, status, message)
+            raise TrainingError(message)
+        train_kwargs = build_classify_train_kwargs(
+            data_dir=data_dir,
+            run_dir=run_dir,
+            epochs=int(request["epochs"]),
+            imgsz=int(request["imgsz"]),
+            batch=int(request["batch"]),
+            device=str(request["device"]),
+        )
+    else:
+        train_kwargs = build_train_kwargs(
+            data_yaml=Path(request["data_yaml"]),
+            run_dir=run_dir,
+            epochs=int(request["epochs"]),
+            imgsz=int(request["imgsz"]),
+            batch=int(request["batch"]),
+            device=str(request["device"]),
+        )
 
     factory = yolo_factory or _default_yolo_factory
     try:

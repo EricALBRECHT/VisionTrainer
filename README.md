@@ -1,6 +1,9 @@
 # Vision Trainer
 
-Application locale pour préparer et entraîner des modèles de détection d'objets (YOLO / Ultralytics).
+Application locale pour entraîner des modèles **YOLO / Ultralytics** :
+
+- **Détection** — objets + bounding boxes
+- **Classification** — classe / probabilités (ImageFolder, style Teachable Machine)
 
 ## Installation (local)
 
@@ -10,7 +13,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## Lancement (local)
+## Lancement (local / CPU)
 
 ```bash
 streamlit run app/streamlit_app.py
@@ -18,72 +21,45 @@ streamlit run app/streamlit_app.py
 
 Données locales par défaut : `./artifacts/` (`datasets/`, `runs/`).
 
+## Datasets
+
+### Détection (YOLO)
+
+ZIP avec `data.yaml`, **ou** sans YAML mais avec :
+
+```text
+train/images + train/labels (+ val/…)
+train/classes.txt   # une classe par ligne
+```
+
+Dans ce second cas, VisionTrainer génère un `data.yaml` interne (sans écraser un YAML existant).
+
+### Classification
+
+```text
+dataset/
+  train/
+    ClasseA/
+    ClasseB/
+  val/
+    ClasseA/
+    ClasseB/
+```
+
+Import ZIP sur **Classification — Dataset**. Aucune bounding box.
+
+## Inférence classification — seuil « Inconnu »
+
+Sur la page Inférence (mode Classification) :
+
+- **seuil de confiance minimum** → sous le seuil : `INCONNU / CONFIANCE INSUFFISANTE`
+- **écart Top-1 / Top-2** → trop faible : `INCERTAIN`
+
+Ce n’est **pas** une détection OOD formelle.
+
 ## Lancement avec Docker
 
 Prérequis : Docker et Docker Compose.
-
-```bash
-git clone <repository>
-cd vision-trainer
-docker compose up --build
-```
-
-Puis ouvrir :
-
-```text
-http://localhost:8501
-```
-
-### Arrêter
-
-```bash
-docker compose down
-```
-
-### Reconstruire après modification
-
-```bash
-docker compose up --build
-```
-
-### Voir les logs
-
-```bash
-docker compose logs -f
-```
-
-### Données persistantes
-
-Le bind mount `./data` (hôte) → `/app/data` (conteneur) conserve :
-
-- `data/datasets/` — ZIP importés et datasets extraits
-- `data/runs/` — runs d'entraînement, checkpoints, `best.*`
-- `data/ultralytics/` — cache / config Ultralytics
-- `data/tmp/` — fichiers temporaires d'inférence
-
-Ces dossiers survivent à `docker compose down` et à une reconstruction d'image.
-
-Variable d'environnement optionnelle :
-
-```text
-VISIONTRAINER_DATA_DIR=/app/data
-```
-
-Sans cette variable (hors Docker), l'application utilise `./artifacts`.
-
-
-### Docker Desktop + WSL
-
-Si le montage `./data` échoue (erreur *distro mount service*), lancez :
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
-```
-
-Les données sont alors dans le volume Docker `vision-trainer-data`.
-
-
-## Docker CPU
 
 ```bash
 docker compose up --build
@@ -91,7 +67,20 @@ docker compose up --build
 
 Puis : http://localhost:8501
 
-Sur Docker Desktop + WSL si le bind-mount `./data` échoue :
+Upload Streamlit : `maxUploadSize = 2048` (Mo) dans `.streamlit/config.toml`.
+
+### Données persistantes
+
+Bind mount `./data` → `/app/data` :
+
+- `datasets/` — ZIP importés
+- `runs/` — entraînements / `best.pt`
+- `ultralytics/` — cache
+- `tmp/` — temporaires
+
+`VISIONTRAINER_DATA_DIR=/app/data` (Docker). Hors Docker : `./artifacts`.
+
+### Docker Desktop + WSL
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
@@ -99,32 +88,16 @@ docker compose -f docker-compose.yml -f docker-compose.wsl.yml up --build
 
 ## Docker GPU NVIDIA
 
-Prérequis :
-
-- GPU NVIDIA + drivers à jour
-- Linux : [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-- Windows : Docker Desktop avec support GPU WSL2 activé
-
-Lancement :
-
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 ```
 
-Avec le fallback volume WSL si besoin :
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.wsl.yml up --build
-```
-
-Vérifier CUDA dans le conteneur :
+Vérifier CUDA :
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec vision-trainer \
-  python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.device_count()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'n/a')"
+  python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'n/a')"
 ```
-
-La configuration CPU (`docker compose up --build`) reste utilisable sans GPU.
 
 ## Tests
 
@@ -132,6 +105,6 @@ La configuration CPU (`docker compose up --build`) reste utilisable sans GPU.
 pytest
 ```
 
-## Artefacts d'entraînement
+## Artefacts
 
-Les runs sont écrits sous `<data_root>/runs/<run_id>/` (ignoré par git).
+Runs sous `<data_root>/runs/<run_id>/` avec `task=detect|classify` dans `status.json` (les anciens runs sans `task` restent lus comme détection).

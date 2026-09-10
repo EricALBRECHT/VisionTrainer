@@ -44,8 +44,23 @@ def test_discover_trained_models_finds_best(tmp_path: Path) -> None:
     models = discover_trained_models(tmp_path)
     assert len(models) == 2
     assert models[0].run_id == "20260822-232302-e5a882"
-    assert models[0].label == "20260822-232302-e5a882 — best.pt"
+    assert models[0].label == "20260822-232302-e5a882 [det] — best.pt"
     assert Path(models[0].weights_path).name == "best.pt"
+
+
+def test_discover_trained_models_filters_by_task(tmp_path: Path) -> None:
+    det = tmp_path / "run-det"
+    cls = tmp_path / "run-cls"
+    _write_best(det)
+    _write_best(cls)
+    (cls / "status.json").write_text(
+        '{"run_id":"run-cls","state":"completed","task":"classify"}',
+        encoding="utf-8",
+    )
+    assert len(discover_trained_models(tmp_path, task="detect")) == 1
+    assert discover_trained_models(tmp_path, task="detect")[0].run_id == "run-det"
+    assert len(discover_trained_models(tmp_path, task="classify")) == 1
+    assert discover_trained_models(tmp_path, task="classify")[0].run_id == "run-cls"
 
 
 def test_discover_excludes_runs_without_best(tmp_path: Path) -> None:
