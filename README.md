@@ -117,6 +117,25 @@ Stockage : `pipelines/*.json` (format **v2** à la sauvegarde). Les pipelines **
 
 Surfaces de masque : **% du crop analysé** (et optionnellement % de l'image) — pas une mesure physique.
 
+## Vidéo & Caméra
+
+Traitement **frame par frame** réutilisant les moteurs image :
+
+- modes : **Détection**, **Segmentation**, **Pipeline** ;
+- export vidéo annotée (MP4, **sans audio** en V1) ;
+- **FPS source / export** ≠ **FPS traitement** (vitesse d'inférence) ;
+- `frame stride` : frames non analysées = image originale (pas d'ancienne annotation) ;
+- modèles chargés **une fois** (cache) avant la boucle ;
+- caméra : indices `0, 1, …` côté **serveur** (pas la webcam navigateur).
+
+### Limitations webcam Docker / WSL
+
+`cv2.VideoCapture(index)` voit les périphériques Linux du conteneur / WSL, pas automatiquement la webcam Windows. En cas d'échec : utiliser un fichier vidéo, ou monter `/dev/video*` / lancer hors Docker.
+
+### Préparation future
+
+Même API frame (`processor.process(frame)`) pour RTSP, robot, API — résultat structuré séparé du rendu annoté.
+
 ## Lancement avec Docker
 
 Prérequis : Docker et Docker Compose.
@@ -127,7 +146,7 @@ docker compose up --build
 
 Puis : http://localhost:8501
 
-Upload Streamlit : `maxUploadSize = 2048` (Mo) dans `.streamlit/config.toml`.
+Upload Streamlit : `maxUploadSize = 10240` (Mo, soit 10 Go) dans `.streamlit/config.toml`.
 
 ### Données persistantes
 
