@@ -36,20 +36,28 @@ from vision_trainer.inference.video import (
     run_video_inference,
 )
 from vision_trainer.results.models import SESSION_INFERENCE_WEIGHTS_KEY
+from vision_trainer.segment.export import segmentation_result_json_bytes
+from vision_trainer.segment.predictor import result_table_rows as segment_table_rows
+from vision_trainer.segment.predictor import run_segmentation
+from vision_trainer.segment.render import draw_segmentation_result
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 from vision_trainer.ui.device_selector import render_device_selector
 
 st.set_page_config(page_title="Inférence — Vision Trainer", layout="wide")
 st.title("Inférence")
-st.markdown("Testez un modèle entraîné (détection ou classification).")
+st.markdown("Testez un modèle entraîné (détection, classification ou segmentation).")
 
 infer_task = st.radio(
     "Type de modèle",
-    options=["Détection", "Classification"],
+    options=["Détection", "Classification", "Segmentation"],
     horizontal=True,
     key="inference_task_mode",
 )
-task_key = "detect" if infer_task == "Détection" else "classify"
+task_key = {
+    "Détection": "detect",
+    "Classification": "classify",
+    "Segmentation": "segment",
+}[infer_task]
 
 models = discover_trained_models(ARTIFACTS_RUNS_DIR, task=task_key)
 if not models:
@@ -235,6 +243,135 @@ if task_key == "classify":
                 st.dataframe(rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune probabilité disponible.")
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# Segmentation (image)
+# ---------------------------------------------------------------------------
+if task_key == "segment":
+    conf = st.slider(
+        "Seuil de confiance",
+        min_value=0.05,
+        max_value=0.95,
+        value=DEFAULT_CONF,
+        step=0.05,
+        key="seg_inference_conf",
+    )
+    iou = st.slider(
+        "Seuil IoU",
+        min_value=0.05,
+        max_value=0.95,
+        value=DEFAULT_IOU,
+        step=0.05,
+        key="seg_inference_iou",
+    )
+    show_masks = st.checkbox("Afficher masques", value=True, key="seg_show_masks")
+    show_contours = st.checkbox("Afficher contours", value=True, key="seg_show_contours")
+    show_labels = st.checkbox("Afficher labels", value=True, key="seg_show_labels")
+    show_boxes = st.checkbox("Afficher bounding boxes", value=False, key="seg_show_boxes")
+    mask_opacity = st.slider(
+        "Opacité du masque",
+        min_value=0.05,
+        max_value=0.90,
+        value=0.40,
+        step=0.05,
+        key="seg_mask_opacity",
+    )
+    annotation_label = st.selectbox(
+        "Taille des annotations",
+        options=[label for label, _ in ANNOTATION_SCALE_OPTIONS],
+        index=0,
+        key="seg_annotation_scale",
+    )
+    annotation_scale = next(
+        key for label, key in ANNOTATION_SCALE_OPTIONS if label == annotation_label
+    )
+    device_choice, resolved_device, _resolved_label = render_device_selector(
+        key_prefix="infer_segment",
+        default_choice="auto",
+    )
+
+    uploaded = st.file_uploader(
+        "Image à segmenter",
+        type=["jpg", "jpeg", "png", "webp"],
+        help="Formats acceptés : JPG, JPEG, PNG, WEBP.",
+    )
+    if uploaded is None:
+        st.info("Chargez une image pour tester le modèle de segmentation.")
+        st.stop()
+
+    original_name = display_upload_name(uploaded.name)
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+        st.error("Format d'image non supporté.")
+        st.stop()
+
+    temp_dir = _ensure_temp_dir()
+    image_path = safe_internal_upload_path(temp_dir, original_name)
+    image_path.write_bytes(uploaded.getvalue())
+    try:
+        original_image = load_image_rgb(image_path)
+    except InferenceError as exc:
+        st.error(str(exc))
+        st.stop()
+
+    st.image(original_image, caption=original_name, use_container_width=True)
+
+    if st.button("Lancer l'inférence", type="primary", key="seg_run"):
+        try:
+            with st.spinner("Segmentation…"):
+                cached_model = _load_yolo_model(selected_model.weights_path)
+
+                def _factory(_path: str):
+                    return cached_model
+
+                result = run_segmentation(
+                    weights_path=selected_model.weights_path,
+                    image=original_image,
+                    conf=float(conf),
+                    iou=float(iou),
+                    device_choice=device_choice,
+                    model_factory=_factory,
+                )
+        except InferenceError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Erreur inattendue : {exc}")
+        else:
+            annotated = draw_segmentation_result(
+                original_image,
+                result,
+                show_masks=show_masks,
+                show_contours=show_contours,
+                show_labels=show_labels,
+                show_boxes=show_boxes,
+                mask_opacity=float(mask_opacity),
+                scale=annotation_scale,
+            )
+            st.subheader("Résultat")
+            st.image(annotated, caption="Segmentation", use_container_width=True)
+            st.download_button(
+                "Télécharger l'image annotée",
+                data=annotated_image_to_jpeg_bytes(annotated),
+                file_name=build_download_filename(original_name),
+                mime="image/jpeg",
+                key="seg_dl_image",
+            )
+            st.download_button(
+                "Exporter JSON (polygones / surfaces)",
+                data=segmentation_result_json_bytes(result),
+                file_name=f"{Path(original_name).stem}_segmentation.json",
+                mime="application/json",
+                key="seg_dl_json",
+            )
+            st.caption(
+                "La surface est en **pixels** (et ratio d'image), pas une mesure physique."
+            )
+            rows = segment_table_rows(result)
+            if rows:
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucune instance détectée.")
     st.stop()
 
 # ---------------------------------------------------------------------------

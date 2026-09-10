@@ -22,8 +22,7 @@ def normalize_task(value: str | None) -> TaskType:
     Normalize a stored task value.
 
     Missing / unknown values default to ``detect`` so legacy runs without a
-    ``task`` field remain readable. ``segment`` is reserved for a future
-    feature and is accepted when present without enabling UI for it yet.
+    ``task`` field remain readable.
     """
     raw = (value or "").strip().lower()
     if raw in KNOWN_TASKS:

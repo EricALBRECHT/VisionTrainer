@@ -44,6 +44,11 @@ class RunMetrics:
     map50_95: float | None = None
     accuracy_top1: float | None = None
     accuracy_top5: float | None = None
+    # Segmentation mask metrics (Ultralytics metrics/*(M)); box metrics use fields above.
+    mask_precision: float | None = None
+    mask_recall: float | None = None
+    mask_map50: float | None = None
+    mask_map50_95: float | None = None
 
 
 @dataclass
@@ -80,6 +85,10 @@ class RunStatus:
             map50_95=_as_optional_float(metrics_raw.get("map50_95")),
             accuracy_top1=_as_optional_float(metrics_raw.get("accuracy_top1")),
             accuracy_top5=_as_optional_float(metrics_raw.get("accuracy_top5")),
+            mask_precision=_as_optional_float(metrics_raw.get("mask_precision")),
+            mask_recall=_as_optional_float(metrics_raw.get("mask_recall")),
+            mask_map50=_as_optional_float(metrics_raw.get("mask_map50")),
+            mask_map50_95=_as_optional_float(metrics_raw.get("mask_map50_95")),
         )
         return cls(
             run_id=str(data["run_id"]),
@@ -351,7 +360,7 @@ def read_log_tail(run_dir: Path, max_lines: int = 40) -> str:
 
 
 def extract_metrics_from_trainer(trainer: Any) -> RunMetrics:
-    """Best-effort extraction of Ultralytics trainer metrics (detect or classify)."""
+    """Best-effort extraction of Ultralytics trainer metrics (detect/classify/segment)."""
     raw: dict[str, Any] = {}
     metrics_obj = getattr(trainer, "metrics", None)
     if isinstance(metrics_obj, dict):
@@ -366,6 +375,12 @@ def extract_metrics_from_trainer(trainer: Any) -> RunMetrics:
             raw.setdefault("metrics/recall(B)", getattr(box, "mr", None))
             raw.setdefault("metrics/mAP50(B)", getattr(box, "map50", None))
             raw.setdefault("metrics/mAP50-95(B)", getattr(box, "map", None))
+        seg = getattr(metrics_obj, "seg", None)
+        if seg is not None:
+            raw.setdefault("metrics/precision(M)", getattr(seg, "mp", None))
+            raw.setdefault("metrics/recall(M)", getattr(seg, "mr", None))
+            raw.setdefault("metrics/mAP50(M)", getattr(seg, "map50", None))
+            raw.setdefault("metrics/mAP50-95(M)", getattr(seg, "map", None))
         for key in ("top1", "top5", "accuracy_top1", "accuracy_top5"):
             if hasattr(metrics_obj, key):
                 raw.setdefault(f"metrics/{key}", getattr(metrics_obj, key))
@@ -396,6 +411,14 @@ def extract_metrics_from_trainer(trainer: Any) -> RunMetrics:
                 "train/accuracy_top5",
                 "val/accuracy_top5",
             ),
+        ),
+        mask_precision=_first_metric(
+            raw, ("metrics/precision(M)", "precision(M)", "mask_precision")
+        ),
+        mask_recall=_first_metric(raw, ("metrics/recall(M)", "recall(M)", "mask_recall")),
+        mask_map50=_first_metric(raw, ("metrics/mAP50(M)", "mAP50(M)", "mask_map50")),
+        mask_map50_95=_first_metric(
+            raw, ("metrics/mAP50-95(M)", "mAP50-95(M)", "mask_map50_95")
         ),
     )
 

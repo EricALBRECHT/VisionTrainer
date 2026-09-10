@@ -35,7 +35,15 @@ def discover_trained_models(
         if wanted is not None and run_task != wanted:
             continue
         run_id = child.name
-        task_tag = "cls" if run_task == "classify" else "det" if run_task == "detect" else run_task
+        task_tag = (
+            "cls"
+            if run_task == "classify"
+            else "seg"
+            if run_task == "segment"
+            else "det"
+            if run_task == "detect"
+            else run_task
+        )
         models.append(
             AvailableModel(
                 run_id=run_id,

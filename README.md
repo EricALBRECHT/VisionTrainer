@@ -2,8 +2,10 @@
 
 Application locale pour entraîner des modèles **YOLO / Ultralytics** :
 
-- **Détection** — objets + bounding boxes
-- **Classification** — classe / probabilités (ImageFolder, style Teachable Machine)
+- **Détection** — objets + bounding boxes (*où ?*)
+- **Classification** — classe / probabilités (*quoi ?*)
+- **Segmentation** — masques / polygones (*quels pixels ?*)
+- **Pipelines** — Détection → Classification optionnelle
 
 ## Installation (local)
 
@@ -47,6 +49,41 @@ dataset/
 ```
 
 Import ZIP sur **Classification — Dataset**. Aucune bounding box.
+
+## Segmentation
+
+**Classification** : quoi ? · **Détection** : où ? · **Segmentation** : quels pixels ?
+
+### Dataset
+
+Format YOLO segmentation Ultralytics :
+
+```text
+dataset/
+  train/images/
+  train/labels/   # class x1 y1 x2 y2 x3 y3 ...
+  val/images/
+  val/labels/
+  data.yaml
+```
+
+Les labels sont des **polygones** normalisés. VisionTrainer **refuse** les fichiers au format détection (`class xc yc w h`) sans conversion automatique.
+
+Import ZIP sur **Segmentation — Dataset**, avec prévisualisation des polygones.
+
+### Entraînement
+
+Modèles proposés (Ultralytics 8.4.x) : `yolo11n-seg.pt` (défaut), `yolo11s-seg.pt`, `yolo11m-seg.pt`.
+
+Batch **auto** recommandé (VRAM plus élevée qu’en détection).
+
+### Inférence
+
+Page **Inférence** → mode **Segmentation** : masques semi-transparents, contours, labels, surface en **pixels** (+ ratio d’image). Export JSON des polygones possible.
+
+### Métriques
+
+L’historique distingue **Box** (Precision / Recall / mAP) et **Mask** (mêmes indicateurs sur les masques). Ce ne sont pas les mêmes qualités.
 
 ## Inférence classification — seuil « Inconnu »
 

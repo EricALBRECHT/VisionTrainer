@@ -17,13 +17,13 @@ from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 
 st.set_page_config(page_title="Résultats — Vision Trainer", layout="wide")
 st.title("Résultats")
-st.markdown("Consultez les entraînements (détection et classification) dans les runs.")
+st.markdown("Consultez les entraînements (détection, classification, segmentation) dans les runs.")
 
 runs = discover_runs(ARTIFACTS_RUNS_DIR)
 if not runs:
     st.info(
-        "Aucun run trouvé. Lancez un entraînement depuis **Entraînement** "
-        "ou **Classification — Entraînement**."
+        "Aucun run trouvé. Lancez un entraînement depuis **Entraînement**, "
+        "**Classification — Entraînement** ou **Segmentation — Entraînement**."
     )
     st.stop()
 
@@ -93,6 +93,17 @@ with col_metrics:
     if summary.task == "classify":
         st.write(f"- Accuracy Top-1 : {format_optional(detail.accuracy_top1, percent=True)}")
         st.write(f"- Accuracy Top-5 : {format_optional(detail.accuracy_top5, percent=True)}")
+    elif summary.task == "segment":
+        st.markdown("**Box**")
+        st.write(f"- Precision : {format_optional(detail.precision, percent=True)}")
+        st.write(f"- Recall : {format_optional(detail.recall, percent=True)}")
+        st.write(f"- mAP50 : {format_optional(detail.map50, percent=True)}")
+        st.write(f"- mAP50-95 : {format_optional(detail.map50_95, percent=True)}")
+        st.markdown("**Mask**")
+        st.write(f"- Precision : {format_optional(detail.mask_precision, percent=True)}")
+        st.write(f"- Recall : {format_optional(detail.mask_recall, percent=True)}")
+        st.write(f"- mAP50 : {format_optional(detail.mask_map50, percent=True)}")
+        st.write(f"- mAP50-95 : {format_optional(detail.mask_map50_95, percent=True)}")
     else:
         st.write(f"- Precision : {format_optional(detail.precision, percent=True)}")
         st.write(f"- Recall : {format_optional(detail.recall, percent=True)}")
@@ -115,25 +126,47 @@ if detail.best_pt is not None and summary.state in {"terminé", "completed", "in
             )
 
 history = load_metrics_history(summary.run_dir)
-if summary.task != "classify" and history is not None and (history.has_map50 or history.has_map50_95):
+if summary.task == "classify":
+    st.caption("Métriques détection/segmentation (mAP) non applicables à la classification.")
+elif history is not None and (
+    history.has_map50
+    or history.has_map50_95
+    or history.has_mask_map50
+    or history.has_mask_map50_95
+):
     st.subheader("Courbes d'entraînement (results.csv)")
     rows: list[dict] = []
     for index, epoch in enumerate(history.epochs):
         row: dict = {"epoch": epoch}
         if history.has_map50 and history.map50[index] is not None:
-            row["mAP50"] = history.map50[index]
+            row["Box mAP50"] = history.map50[index]
         if history.has_map50_95 and history.map50_95[index] is not None:
-            row["mAP50-95"] = history.map50_95[index]
+            row["Box mAP50-95"] = history.map50_95[index]
+        if history.has_mask_map50 and history.mask_map50[index] is not None:
+            row["Mask mAP50"] = history.mask_map50[index]
+        if history.has_mask_map50_95 and history.mask_map50_95[index] is not None:
+            row["Mask mAP50-95"] = history.mask_map50_95[index]
+        # Keep legacy keys for detect-only charts readability
+        if summary.task != "segment":
+            if "Box mAP50" in row:
+                row["mAP50"] = row.pop("Box mAP50")
+            if "Box mAP50-95" in row:
+                row["mAP50-95"] = row.pop("Box mAP50-95")
         rows.append(row)
-    y_cols = [key for key in ("mAP50", "mAP50-95") if any(key in row for row in rows)]
+    if summary.task == "segment":
+        y_cols = [
+            key
+            for key in ("Box mAP50", "Box mAP50-95", "Mask mAP50", "Mask mAP50-95")
+            if any(key in row for row in rows)
+        ]
+    else:
+        y_cols = [key for key in ("mAP50", "mAP50-95") if any(key in row for row in rows)]
     if y_cols:
         st.line_chart(rows, x="epoch", y=y_cols)
-elif summary.task == "classify":
-    st.caption("Métriques détection (mAP) non applicables à la classification.")
 elif history is None:
     st.caption("Pas de `results.csv` pour ce run.")
 else:
-    st.caption("`results.csv` présent mais sans colonnes mAP50 / mAP50-95 détectées.")
+    st.caption("`results.csv` présent mais sans colonnes mAP détectées.")
 
 st.subheader("Graphiques Ultralytics")
 if not detail.plots:

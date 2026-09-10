@@ -60,6 +60,7 @@ def load_run(run_dir: Path) -> RunDetail:
     summary = _load_run_summary(run_dir)
     precision = recall = map50 = map50_95 = None
     accuracy_top1 = accuracy_top5 = None
+    mask_precision = mask_recall = mask_map50 = mask_map50_95 = None
     error_message = summary.load_warning
     status_data = _safe_read_status_dict(run_dir)
 
@@ -72,6 +73,10 @@ def load_run(run_dir: Path) -> RunDetail:
             map50_95 = _as_float(metrics.get("map50_95"))
             accuracy_top1 = _as_float(metrics.get("accuracy_top1"))
             accuracy_top5 = _as_float(metrics.get("accuracy_top5"))
+            mask_precision = _as_float(metrics.get("mask_precision"))
+            mask_recall = _as_float(metrics.get("mask_recall"))
+            mask_map50 = _as_float(metrics.get("mask_map50"))
+            mask_map50_95 = _as_float(metrics.get("mask_map50_95"))
         error_message = status_data.get("error_message") or error_message
 
     best = run_dir / "weights" / "best.pt"
@@ -91,6 +96,10 @@ def load_run(run_dir: Path) -> RunDetail:
         map50_95=map50_95,
         accuracy_top1=accuracy_top1,
         accuracy_top5=accuracy_top5,
+        mask_precision=mask_precision,
+        mask_recall=mask_recall,
+        mask_map50=mask_map50,
+        mask_map50_95=mask_map50_95,
         best_pt=best if best.is_file() else None,
         last_pt=last if last.is_file() else None,
         plots=plots,
@@ -137,10 +146,28 @@ def load_metrics_history(run_dir: Path) -> MetricsHistory | None:
                     "metrics/map50-95(box)",
                 ),
             )
+            mask_map50_key = _find_column(
+                normalized_map,
+                (
+                    "metrics/map50(m)",
+                    "map50(m)",
+                    "metrics/map50(mask)",
+                ),
+            )
+            mask_map5095_key = _find_column(
+                normalized_map,
+                (
+                    "metrics/map50-95(m)",
+                    "map50-95(m)",
+                    "metrics/map50-95(mask)",
+                ),
+            )
 
             epochs: list[int] = []
             map50_values: list[float | None] = []
             map5095_values: list[float | None] = []
+            mask_map50_values: list[float | None] = []
+            mask_map5095_values: list[float | None] = []
 
             for index, row in enumerate(reader, start=1):
                 epoch_raw = row.get(epoch_key) if epoch_key else None
@@ -151,11 +178,19 @@ def load_metrics_history(run_dir: Path) -> MetricsHistory | None:
                 map5095_values.append(
                     _as_float(row.get(map5095_key)) if map5095_key else None
                 )
+                mask_map50_values.append(
+                    _as_float(row.get(mask_map50_key)) if mask_map50_key else None
+                )
+                mask_map5095_values.append(
+                    _as_float(row.get(mask_map5095_key)) if mask_map5095_key else None
+                )
 
             return MetricsHistory(
                 epochs=epochs,
                 map50=map50_values,
                 map50_95=map5095_values,
+                mask_map50=mask_map50_values,
+                mask_map50_95=mask_map5095_values,
                 columns=[_normalize_column(name) for name in raw_fields],
             )
     except (OSError, csv.Error, UnicodeError):
