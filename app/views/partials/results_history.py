@@ -15,6 +15,8 @@ from vision_trainer.results.models import SESSION_INFERENCE_WEIGHTS_KEY
 from vision_trainer.tasks import task_label_fr
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 
+from navigation import PAGE_INFERENCE
+
 
 def render(*, embedded: bool = False) -> None:
     if not embedded:
@@ -148,7 +150,7 @@ def render(*, embedded: bool = False) -> None:
                     "classify": "Classification",
                     "segment": "Segmentation",
                 }.get(summary.task, "Détection")
-                st.switch_page("inference")
+                st.switch_page(PAGE_INFERENCE)
             except Exception:  # noqa: BLE001 - older Streamlit fallback
                 st.success(
                     "Modèle sélectionné pour l'inférence. Ouvrez la rubrique **Inférence**."

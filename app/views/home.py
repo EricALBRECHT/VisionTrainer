@@ -4,6 +4,15 @@ from __future__ import annotations
 
 import streamlit as st
 
+from navigation import (
+    PAGE_DATASETS,
+    PAGE_INFERENCE,
+    PAGE_PIPELINES,
+    PAGE_RESULTS,
+    PAGE_TRAINING,
+    PAGE_VIDEO,
+)
+
 
 def render() -> None:
     st.title("Vision Trainer")
@@ -26,18 +35,18 @@ def render() -> None:
     cols = st.columns(3)
     with cols[0]:
         if st.button("📦 Datasets", use_container_width=True):
-            st.switch_page("datasets")
+            st.switch_page(PAGE_DATASETS)
         if st.button("🧠 Entraînement", use_container_width=True):
-            st.switch_page("entrainement")
+            st.switch_page(PAGE_TRAINING)
         if st.button("🔍 Inférence", use_container_width=True):
-            st.switch_page("inference")
+            st.switch_page(PAGE_INFERENCE)
     with cols[1]:
         if st.button("🔗 Pipelines", use_container_width=True):
-            st.switch_page("pipelines")
+            st.switch_page(PAGE_PIPELINES)
         if st.button("🎬 Vidéo & Caméra", use_container_width=True):
-            st.switch_page("video-camera")
+            st.switch_page(PAGE_VIDEO)
         if st.button("📊 Résultats", use_container_width=True):
-            st.switch_page("resultats")
+            st.switch_page(PAGE_RESULTS)
     with cols[2]:
         st.info(
             "CPU ou GPU NVIDIA (Docker Compose GPU). "
