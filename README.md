@@ -96,21 +96,26 @@ Ce n’est **pas** une détection OOD formelle.
 
 ## Pipelines
 
-Chaînage optionnel **Détection → Classification** (classe par classe) :
+Chaînage optionnel **classe par classe** :
 
-1. Entraîner un détecteur (ex. `Apple`, `Tomato`, `Carrot`)
-2. Entraîner un ou plusieurs classificateurs (ex. Golden / Gala / Granny Smith)
-3. Page **Pipelines** : choisir le détecteur, cocher les classes à affiner, associer un classificateur + seuils
-4. Page **Inférence Pipeline** : lancer une image
+```text
+Détection
+    ↓
+Classification optionnelle
+    ↓
+Segmentation optionnelle
+```
 
-Fonctionnement :
+Chaque classe du détecteur peut activer indépendamment :
 
-- détection sur l’image originale ;
-- pour chaque objet d’une classe affinée : **crop** de la bbox (avec padding optionnel, défaut 5 %) ;
-- classification du crop avec la logique V1 (`INCONNU` / `INCERTAIN`) ;
-- les classes non affinées restent des détections simples (`Carrot 93 %`).
+- un **classificateur** (`task=classify`) — Top-N, INCONNU / INCERTAIN ;
+- un **segmenter** (`task=segment`) — masques sur le crop, polygones remappés en coordonnées image.
 
-Stockage : `pipelines/*.json` sous le data root (`VISIONTRAINER_DATA_DIR` ou `./artifacts`). Les fichiers référencent des **run id** (pas les poids embarqués), ce qui reste portable après redémarrage Docker.
+Exemple : `Bearing` → classifier type → segmenter défaut ; `Other` → détection seule.
+
+Stockage : `pipelines/*.json` (format **v2** à la sauvegarde). Les pipelines **v1** (detect→classify) restent lisibles sans réécriture automatique.
+
+Surfaces de masque : **% du crop analysé** (et optionnellement % de l'image) — pas une mesure physique.
 
 ## Lancement avec Docker
 

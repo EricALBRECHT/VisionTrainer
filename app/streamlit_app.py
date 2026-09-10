@@ -28,9 +28,9 @@ st.markdown(
     2. **Segmentation — Entraînement** — YOLO11-seg
     3. **Inférence** — mode Segmentation (masques + contours)
 
-    ### Pipeline (Détection → Classification)
-    1. **Pipelines** — associer un classificateur à certaines classes détectées
-    2. **Inférence Pipeline** — image → détection → crop → classification optionnelle
+    ### Pipeline (Détection → Classification? → Segmentation?)
+    1. **Pipelines** — raffinements optionnels par classe (classify et/ou segment)
+    2. **Inférence Pipeline** — crop original → étapes secondaires
 
     ### Commun
     - **Résultats** — historique détection, classification **et** segmentation

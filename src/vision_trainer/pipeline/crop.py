@@ -1,8 +1,11 @@
-"""Crop extraction from original images for pipeline refinement."""
+"""Crop extraction and local→global coordinate transforms."""
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+from typing import Sequence
+
 from PIL import Image
 
 
@@ -86,6 +89,68 @@ def padded_crop_box(
     if crop_right <= crop_left or crop_bottom <= crop_top:
         raise CropError("Crop résultant vide après padding / clamp.")
     return crop_left, crop_top, crop_right, crop_bottom
+
+
+@dataclass(frozen=True)
+class CropRegion:
+    """
+    Actual cropped region in original-image pixel space.
+
+    Secondary models (classify / segment) run on ``image``; their local
+    coordinates must be remapped with the helpers below.
+    """
+
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    image: Image.Image
+
+    @property
+    def width(self) -> int:
+        return max(0, self.x2 - self.x1)
+
+    @property
+    def height(self) -> int:
+        return max(0, self.y2 - self.y1)
+
+    @property
+    def box(self) -> tuple[int, int, int, int]:
+        return self.x1, self.y1, self.x2, self.y2
+
+    def local_to_global_point(self, x: float, y: float) -> tuple[float, float]:
+        return float(self.x1) + float(x), float(self.y1) + float(y)
+
+    def local_to_global_polygon(
+        self,
+        points: Sequence[tuple[float, float]],
+    ) -> tuple[tuple[float, float], ...]:
+        return tuple(self.local_to_global_point(x, y) for x, y in points)
+
+    def local_to_global_bbox(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+    ) -> tuple[float, float, float, float]:
+        gx1, gy1 = self.local_to_global_point(x1, y1)
+        gx2, gy2 = self.local_to_global_point(x2, y2)
+        return min(gx1, gx2), min(gy1, gy2), max(gx1, gx2), max(gy1, gy2)
+
+
+def crop_region_from_detection(
+    image: Image.Image,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    *,
+    padding: float = 0.05,
+) -> CropRegion:
+    """Build a CropRegion from the original image (not a display canvas)."""
+    crop, box = crop_from_detection(image, x1, y1, x2, y2, padding=padding)
+    return CropRegion(x1=box[0], y1=box[1], x2=box[2], y2=box[3], image=crop)
 
 
 def crop_from_detection(

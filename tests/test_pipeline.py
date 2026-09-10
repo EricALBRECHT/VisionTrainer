@@ -79,7 +79,7 @@ def test_pipeline_create_and_load_roundtrip(tmp_path: Path, monkeypatch) -> None
     assert loaded.mappings["Apple"].enabled is True
     assert loaded.mappings["Apple"].classifier_run_id == "cls-apple"
     assert loaded.mappings["Carrot"].enabled is False
-    assert loaded.format_version == 1
+    assert loaded.format_version == 2
 
 
 def test_serialization_deserialization_dict() -> None:
@@ -90,7 +90,8 @@ def test_serialization_deserialization_dict() -> None:
         mappings={"A": ClassMapping(enabled=True, classifier_run_id="c1")},
     )
     restored = PipelineConfig.from_dict(config.to_dict())
-    assert restored.to_dict()["mappings"]["A"]["classifier_run_id"] == "c1"
+    assert restored.to_dict()["mappings"]["A"]["classification"]["run_id"] == "c1"
+    assert restored.to_dict()["format_version"] == 2
 
 
 def test_invalid_pipeline_skipped_in_list(tmp_path: Path, monkeypatch) -> None:
@@ -505,13 +506,6 @@ def test_detector_classes_changed_warning(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_result_table_rows_and_labels() -> None:
-    det = Detection(0, "Apple", 0.94, 1, 2, 3, 4)
-    item = EnrichedDetection(
-        detection=det,
-        refined=True,
-        classification=None,
-    )
-    # without classification still refined flag — treat carefully
     rows = result_table_rows(
         __import__("vision_trainer.pipeline.models", fromlist=["PipelineResult"]).PipelineResult(
             items=[
@@ -519,8 +513,9 @@ def test_result_table_rows_and_labels() -> None:
             ]
         )
     )
-    assert rows[0]["Affinement"] == "Non"
-    assert rows[0]["Statut"] == "Non affiné"
+    assert rows[0]["Objet"] == "Carrot"
+    assert rows[0]["Classification"] == "—"
+    assert rows[0]["Segmentation"] == "—"
 
 
 def test_make_pipeline_id_stable_chars() -> None:
