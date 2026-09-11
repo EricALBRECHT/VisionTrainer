@@ -1,4 +1,4 @@
-"""Streamlit: video file & camera processing (detect / segment / pipeline)."""
+"""Streamlit: video file & camera processing (detect / segment / pipeline + tracking)."""
 
 from __future__ import annotations
 
@@ -19,7 +19,15 @@ from vision_trainer.inference.video import (
     build_video_output_filename,
     probe_video,
 )
-from vision_trainer.pipeline.store import list_pipelines, load_pipeline
+from vision_trainer.pipeline.store import list_pipelines, load_pipeline, resolve_run_weights
+from vision_trainer.tracking.cache import ClassificationTrackCache
+from vision_trainer.tracking.factory import create_tracking_session
+from vision_trainer.tracking.geometry import frame_stride_tracking_warning
+from vision_trainer.tracking.models import TrackingConfig
+from vision_trainer.tracking.processors import (
+    TrackedDetectFrameProcessor,
+    TrackedPipelineFrameProcessor,
+)
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 from vision_trainer.ui.device_selector import render_device_selector
 from vision_trainer.video.camera import (
@@ -49,11 +57,11 @@ def render() -> None:
         - **FPS vidéo** (lecture / export) ≠ **FPS traitement** (vitesse d'inférence).
         - La vidéo exportée est **sans audio** (limitation OpenCV / V1).
         - Frames sautées (`stride > 1`) : image **originale** (pas d'ancienne annotation).
+        - **Tracking** (optionnel) : identifiant persistant `track_id` entre les frames.
         """
     )
 
     st.info(WSL_DOCKER_CAMERA_NOTE)
-
 
     @st.cache_resource(show_spinner=False)
     def _load_yolo_model(weights_path: str):
@@ -61,10 +69,8 @@ def render() -> None:
 
         return YOLO(weights_path)
 
-
     def _model_factory(weights: str):
         return _load_yolo_model(str(weights))
-
 
     def _ensure_temp_dir() -> Path:
         from vision_trainer.paths import get_tmp_dir
@@ -86,7 +92,6 @@ def render() -> None:
             st.session_state["video_temp_dir"] = str(temp_dir)
         return temp_dir
 
-
     def _format_duration(seconds: float | None) -> str:
         if seconds is None:
             return "—"
@@ -94,7 +99,6 @@ def render() -> None:
             return f"{seconds:.1f} s"
         minutes, secs = divmod(int(seconds), 60)
         return f"{minutes} min {secs:02d} s"
-
 
     source_kind = st.radio("Source", options=["Vidéo fichier", "Caméra"], horizontal=True)
     mode = st.radio(
@@ -128,8 +132,72 @@ def render() -> None:
         value=False,
     )
 
+    # --- Tracking (detect + pipeline only) ---
+    tracking_enabled = False
+    show_trajectories = False
+    reuse_classification = True
+    reclassify_n = 30
+    uncertain_n = 5
+    tracker_name = "bytetrack"
+    if mode_key in {"detect", "pipeline"}:
+        with st.expander("Tracking", expanded=False):
+            tracking_enabled = st.checkbox(
+                "Activer le tracking",
+                value=False,
+                help=(
+                    "Le tracking attribue un identifiant persistant à chaque objet "
+                    "entre les frames (ByteTrack via Ultralytics)."
+                ),
+            )
+            if tracking_enabled:
+                st.selectbox("Tracker", options=["ByteTrack"], index=0, disabled=True)
+                tracker_name = "bytetrack"
+                show_trajectories = st.checkbox("Afficher trajectoires", value=False)
+                if mode_key == "pipeline":
+                    reuse_classification = st.checkbox(
+                        "Réutiliser la classification par track",
+                        value=True,
+                    )
+                    reclassify_n = int(
+                        st.number_input(
+                            "Reclassifier tous les N frames (fiable)",
+                            min_value=1,
+                            max_value=300,
+                            value=30,
+                        )
+                    )
+                    uncertain_n = int(
+                        st.number_input(
+                            "Reclassifier INCONNU / INCERTAIN tous les N frames",
+                            min_value=1,
+                            max_value=100,
+                            value=5,
+                        )
+                    )
+                st.caption(
+                    "ByteTrack (Ultralytics) — `track_buffer` ≈ 30 frames d'absence "
+                    "avant nouvel ID. La segmentation n'est **pas** mise en cache."
+                )
+
+    if tracking_enabled and int(frame_stride) > 1:
+        warn = frame_stride_tracking_warning(int(frame_stride))
+        if warn:
+            st.warning(warn)
+
+    tracking_config = TrackingConfig(
+        enabled=tracking_enabled,
+        tracker=tracker_name,  # type: ignore[arg-type]
+        show_trajectories=show_trajectories,
+        reuse_classification=reuse_classification,
+        reclassify_every_n_frames=reclassify_n,
+        uncertain_reclassify_every_n_frames=uncertain_n,
+    )
+
     processor = None
+    tracking_session = None
+    classify_cache = None
     selected_label = ""
+    model_cache: dict = {}
 
     if mode_key in {"detect", "segment"}:
         models = discover_trained_models(ARTIFACTS_RUNS_DIR, task=mode_key)
@@ -147,17 +215,36 @@ def render() -> None:
             0.05,
         )
         iou = st.slider("Seuil IoU", 0.05, 0.95, 0.45, 0.05)
-        model_cache: dict = {}
         if mode_key == "detect":
-            processor = DetectFrameProcessor(
-                weights_path=selected.weights_path,
-                conf=float(conf),
-                iou=float(iou),
-                device_choice=device_choice,
-                model_cache=model_cache,
-                model_factory=_model_factory,
-                annotation_scale=annotation_scale,
-            )
+            if tracking_enabled:
+                tracking_session, _model = create_tracking_session(
+                    selected.weights_path,
+                    tracker="bytetrack",
+                    model_cache=model_cache,
+                    model_factory=_model_factory,
+                )
+                processor = TrackedDetectFrameProcessor(
+                    weights_path=selected.weights_path,
+                    tracking_session=tracking_session,
+                    conf=float(conf),
+                    iou=float(iou),
+                    device_choice=device_choice,
+                    model_cache=model_cache,
+                    model_factory=_model_factory,
+                    annotation_scale=annotation_scale,
+                    show_trajectories=show_trajectories,
+                    tracking_config=tracking_config,
+                )
+            else:
+                processor = DetectFrameProcessor(
+                    weights_path=selected.weights_path,
+                    conf=float(conf),
+                    iou=float(iou),
+                    device_choice=device_choice,
+                    model_cache=model_cache,
+                    model_factory=_model_factory,
+                    annotation_scale=annotation_scale,
+                )
         else:
             show_masks = st.checkbox("Masques", value=True)
             show_contours = st.checkbox("Contours", value=True)
@@ -190,14 +277,38 @@ def render() -> None:
             "Pipeline detect + classify + segment : plus lent et plus gourmand en VRAM "
             "(ex. GTX 1060 3 Go)."
         )
-        model_cache = {}
-        processor = PipelineFrameProcessor(
-            config=config,
-            device_choice=device_choice,
-            model_cache=model_cache,
-            model_factory=_model_factory,
-            annotation_scale=annotation_scale,
-        )
+        if tracking_enabled:
+            det_weights = resolve_run_weights(config.detector_run_id)
+            tracking_session, _model = create_tracking_session(
+                det_weights,
+                tracker="bytetrack",
+                model_cache=model_cache,
+                model_factory=_model_factory,
+            )
+            classify_cache = ClassificationTrackCache(
+                reclassify_every_n_frames=reclassify_n,
+                uncertain_reclassify_every_n_frames=uncertain_n,
+            )
+            processor = TrackedPipelineFrameProcessor(
+                config=config,
+                tracking_session=tracking_session,
+                classify_cache=classify_cache,
+                device_choice=device_choice,
+                model_cache=model_cache,
+                model_factory=_model_factory,
+                annotation_scale=annotation_scale,
+                show_trajectories=show_trajectories,
+                reuse_classification=reuse_classification,
+                tracking_config=tracking_config,
+            )
+        else:
+            processor = PipelineFrameProcessor(
+                config=config,
+                device_choice=device_choice,
+                model_cache=model_cache,
+                model_factory=_model_factory,
+                annotation_scale=annotation_scale,
+            )
 
     assert processor is not None
 
@@ -236,6 +347,12 @@ def render() -> None:
         st.caption("Audio non conservé dans la vidéo annotée exportée.")
 
         if st.button("Lancer le traitement vidéo", type="primary"):
+            if tracking_session is not None:
+                tracking_session.fps = meta.fps
+                tracking_session.reset()
+            if classify_cache is not None:
+                classify_cache.reset()
+
             out_name = build_video_output_filename(original_name)
             out_path = video_path.parent / f"out_{mode_key}_{out_name}"
             progress_bar = st.progress(0.0, text="0 %")
@@ -265,6 +382,13 @@ def render() -> None:
                     use_container_width=True,
                 )
 
+            tracking_payload = None
+            if tracking_enabled and tracking_session is not None:
+                tracking_payload = {
+                    "enabled": True,
+                    "tracker": tracker_name,
+                }
+
             try:
                 with st.spinner("Traitement vidéo…"):
                     summary = process_video(
@@ -277,6 +401,7 @@ def render() -> None:
                         preview_callback=_on_preview,
                         preview_every=int(preview_every),
                         collect_frame_details=bool(export_detailed_json),
+                        tracking_summary=tracking_payload,
                     )
             except VideoInferenceError as exc:
                 st.error(str(exc))
@@ -285,15 +410,23 @@ def render() -> None:
                 st.error(f"Erreur : {exc}")
                 st.stop()
 
+            if tracking_session is not None:
+                summary.tracking = tracking_session.summary_dict()
+
             st.session_state["video_last_summary"] = {
                 "fingerprint": fingerprint,
                 "mode": mode_key,
+                "tracking": tracking_enabled,
                 "summary": summary,
                 "out_name": out_name,
             }
 
         last = st.session_state.get("video_last_summary")
-        if last and last.get("fingerprint") == fingerprint and last.get("mode") == mode_key:
+        if (
+            last
+            and last.get("fingerprint") == fingerprint
+            and last.get("mode") == mode_key
+        ):
             summary = last["summary"]
             st.subheader("Résultat")
             if summary.output_path and Path(summary.output_path).is_file():
@@ -320,10 +453,22 @@ def render() -> None:
                 avg = summary.timings.averages()
                 st.caption(
                     "Moyennes pipeline — "
-                    f"detect {avg['detection_ms'] or 0:.0f} ms · "
+                    f"detect/track {avg['detection_ms'] or 0:.0f} ms · "
                     f"classify {avg['classification_ms'] or 0:.0f} ms · "
                     f"segment {avg['segmentation_ms'] or 0:.0f} ms"
                 )
+            if summary.tracking:
+                tracks = summary.tracking.get("tracks") or {}
+                st.subheader("Tracking")
+                st.write(f"- Tracks créés : {tracks.get('total', tracks.get('tracks_created', '—'))}")
+                st.write(f"- Actifs (fin) : {tracks.get('active_tracks', '—')}")
+                st.write(f"- Terminés : {tracks.get('tracks_finished', '—')}")
+                by_class = tracks.get("by_class") or {}
+                if by_class:
+                    st.write(
+                        "- Par classe : "
+                        + ", ".join(f"{name} : {count}" for name, count in by_class.items())
+                    )
             for warning in summary.warnings:
                 st.warning(warning)
             st.download_button(
@@ -340,6 +485,14 @@ def render() -> None:
     # ---------------------------------------------------------------------------
     else:
         st.subheader("Caméra (serveur)")
+        if tracking_enabled and tracking_session is not None:
+            if st.button("Réinitialiser le tracking"):
+                tracking_session.reset()
+                if classify_cache is not None:
+                    classify_cache.reset()
+                st.session_state.pop("camera_track_stats", None)
+                st.success("Session de tracking réinitialisée.")
+
         max_probe = st.number_input("Indices à sonder", min_value=1, max_value=10, value=3)
         if st.button("Sonder les caméras"):
             infos = list_camera_indices(int(max_probe))
@@ -375,7 +528,13 @@ def render() -> None:
             st.image(frame, caption=f"Capture caméra {cam_index}", use_container_width=True)
             try:
                 with st.spinner("Inférence…"):
-                    result = process_image_with_processor(frame, processor)
+                    cam_frame_index = int(st.session_state.get("camera_frame_index", 0))
+                    result = process_image_with_processor(
+                        frame,
+                        processor,
+                        frame_index=cam_frame_index,
+                    )
+                    st.session_state["camera_frame_index"] = cam_frame_index + 1
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Erreur : {exc}")
                 st.stop()
@@ -383,5 +542,11 @@ def render() -> None:
                 st.image(result.annotated, caption="Résultat", use_container_width=True)
             st.write(f"- Détections / instances : {result.detections}")
             st.write(f"- Temps : {result.total_ms:.0f} ms")
+            if tracking_session is not None:
+                stats = tracking_session.stats()
+                st.write(
+                    f"- Tracking : actifs={stats.active_tracks}, "
+                    f"créés={stats.tracks_created}, terminés={stats.tracks_finished}"
+                )
             for warning in result.warnings:
                 st.warning(warning)

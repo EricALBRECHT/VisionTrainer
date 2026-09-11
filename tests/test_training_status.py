@@ -433,3 +433,22 @@ def test_find_active_run_ignores_dead_processes(
     )
     monkeypatch.setattr("vision_trainer.training.status.is_pid_alive", lambda pid: False)
     assert find_active_run(tmp_path) is None
+
+
+def test_training_log_display_height_is_compact() -> None:
+    from vision_trainer.training.log_display import TRAINING_LOG_DISPLAY_HEIGHT_PX
+
+    assert 250 <= TRAINING_LOG_DISPLAY_HEIGHT_PX <= 300
+    assert TRAINING_LOG_DISPLAY_HEIGHT_PX == 280
+
+
+def test_training_log_body_preserves_full_text() -> None:
+    from vision_trainer.training.log_display import (
+        DEFAULT_EMPTY_LOG_PLACEHOLDER,
+        training_log_body,
+    )
+
+    long_log = "\n".join(f"line-{i}" for i in range(200))
+    assert training_log_body(long_log) == long_log
+    assert training_log_body(None) == DEFAULT_EMPTY_LOG_PLACEHOLDER
+    assert training_log_body("") == DEFAULT_EMPTY_LOG_PLACEHOLDER

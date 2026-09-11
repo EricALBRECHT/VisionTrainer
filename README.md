@@ -107,7 +107,24 @@ Page **Inférence** → mode **Segmentation** : masques semi-transparents, conto
 
 L’historique distingue **Box** (Precision / Recall / mAP) et **Mask** (mêmes indicateurs sur les masques). Ce ne sont pas les mêmes qualités.
 
-## Inférence classification — seuil « Inconnu »
+## Tracking vidéo
+
+Sur **Vidéo & Caméra** (modes Détection ou Pipeline) :
+
+- option **Activer le tracking** (ByteTrack via Ultralytics `model.track(persist=True)`) ;
+- chaque objet reçoit un **`track_id`** stable entre les frames ;
+- affichage : `classe · ID N · conf%` ;
+- trajectoires optionnelles (centres récents, plafond ~50 points) ;
+- **pipeline + tracking** : classification mise en cache par `track_id`
+  (reclassif. tous les 30 frames ; INCONNU/INCERTAIN tous les 5) ;
+- **segmentation** : recalculée à chaque frame (pas de cache de masque) ;
+- `frame_stride > 1` : avertissement (moins d'observations → IDs moins stables) ;
+- JSON vidéo : bloc `tracking` + `track_id` dans les objets détaillés ;
+- pas de tracking sur l'inférence image ni dans la sidebar.
+
+Limitations V1 : pas de ré-identification maison, pas de tracking entraînable,
+caméra robot / RTSP hors scope.
+
 
 Sur la page Inférence (mode Classification) :
 

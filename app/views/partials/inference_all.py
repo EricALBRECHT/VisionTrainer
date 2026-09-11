@@ -43,6 +43,11 @@ from vision_trainer.segment.render import draw_segmentation_result
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 from vision_trainer.ui.device_selector import render_device_selector
 
+from views.partials.inference_display import (
+    render_inference_display_size_selector,
+    show_inference_preview,
+)
+
 
 def render(*, task_key: str | None = None) -> None:
     """Render inference UI.
@@ -97,6 +102,8 @@ def render(*, task_key: str | None = None) -> None:
     selected_label = st.selectbox("Modèle", options=model_labels, index=default_index)
     selected_model = next(model for model in models if model.label == selected_label)
     st.caption(f"Poids : `{selected_model.weights_path}`")
+
+    display_fraction = render_inference_display_size_selector(key="inference_display_size")
 
 
     @st.cache_resource(show_spinner=False)
@@ -207,7 +214,11 @@ def render(*, task_key: str | None = None) -> None:
             st.error(str(exc))
             st.stop()
 
-        st.image(original_image, caption=original_name, use_container_width=True)
+        show_inference_preview(
+            original_image,
+            display_fraction=display_fraction,
+            caption=original_name,
+        )
 
         if st.button("Lancer l'inférence", type="primary"):
             try:
@@ -333,7 +344,11 @@ def render(*, task_key: str | None = None) -> None:
             st.error(str(exc))
             st.stop()
 
-        st.image(original_image, caption=original_name, use_container_width=True)
+        show_inference_preview(
+            original_image,
+            display_fraction=display_fraction,
+            caption=original_name,
+        )
 
         if st.button("Lancer l'inférence", type="primary", key="seg_run"):
             try:
@@ -367,7 +382,11 @@ def render(*, task_key: str | None = None) -> None:
                     scale=annotation_scale,
                 )
                 st.subheader("Résultat")
-                st.image(annotated, caption="Segmentation", use_container_width=True)
+                show_inference_preview(
+                    annotated,
+                    display_fraction=display_fraction,
+                    caption="Segmentation",
+                )
                 st.download_button(
                     "Télécharger l'image annotée",
                     data=annotated_image_to_jpeg_bytes(annotated),
@@ -465,7 +484,11 @@ def render(*, task_key: str | None = None) -> None:
                 st.stop()
 
             st.subheader("Image originale")
-            st.image(original_image, caption=original_name, use_container_width=True)
+            show_inference_preview(
+                original_image,
+                display_fraction=display_fraction,
+                caption=original_name,
+            )
 
         current_binding = {
             "mode": "image",
@@ -538,12 +561,18 @@ def render(*, task_key: str | None = None) -> None:
             with col_left:
                 st.markdown("**Originale**")
                 if original_image is not None:
-                    st.image(original_image, use_container_width=True)
+                    show_inference_preview(
+                        original_image,
+                        display_fraction=display_fraction,
+                    )
                 else:
                     st.caption("Rechargez une image pour revoir l'originale à côté du résultat.")
             with col_right:
                 st.markdown("**Annotée**")
-                st.image(annotated_bytes, use_container_width=True)
+                show_inference_preview(
+                    annotated_bytes,
+                    display_fraction=display_fraction,
+                )
 
             st.write(f"**Nombre total de détections :** {len(detections)}")
 

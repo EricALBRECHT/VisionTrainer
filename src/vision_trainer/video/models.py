@@ -81,6 +81,7 @@ class VideoJobSummary:
     # Optional per-frame lightweight records (disabled by default).
     frame_details: list[dict[str, Any]] = field(default_factory=list)
     audio_preserved: bool = False
+    tracking: dict[str, Any] | None = None
 
     def to_dict(self, *, include_frames: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -113,6 +114,8 @@ class VideoJobSummary:
             "warnings": list(self.warnings),
             "output_path": self.output_path,
         }
+        if self.tracking is not None:
+            payload["tracking"] = dict(self.tracking)
         if include_frames:
             payload["frames"] = list(self.frame_details)
         return payload

@@ -403,3 +403,31 @@ def test_draw_detections_respects_scale_preset() -> None:
     expected_h = round(1080 * (expected_w / 1920))
     assert small.size == large.size == (expected_w, expected_h)
     assert small.tobytes() != large.tobytes()
+
+def test_inference_display_max_width_fractions() -> None:
+    from vision_trainer.inference.render import (
+        DISPLAY_MAX_WIDTH,
+        DEFAULT_INFERENCE_DISPLAY_FRACTION,
+        inference_display_max_width,
+        preview_image_for_ui,
+    )
+
+    assert DEFAULT_INFERENCE_DISPLAY_FRACTION == 0.50
+    assert inference_display_max_width(1.0) == DISPLAY_MAX_WIDTH
+    assert inference_display_max_width(0.5) == DISPLAY_MAX_WIDTH // 2
+    assert inference_display_max_width(0.25) == DISPLAY_MAX_WIDTH // 4
+    assert inference_display_max_width(0.75) == int(round(DISPLAY_MAX_WIDTH * 0.75))
+
+
+def test_preview_image_for_ui_does_not_mutate_original() -> None:
+    from vision_trainer.inference.render import preview_image_for_ui
+
+    image = Image.new("RGB", (4000, 2000), color=(10, 20, 30))
+    original_size = image.size
+    preview_50 = preview_image_for_ui(image, display_fraction=0.50)
+    preview_100 = preview_image_for_ui(image, display_fraction=1.00)
+    assert image.size == original_size
+    assert preview_50.width <= 640
+    assert preview_100.width <= 1280
+    assert preview_50.width < preview_100.width
+

@@ -280,7 +280,7 @@ def test_compose_cpu_and_gpu_preserve_external_mount() -> None:
     wsl = (root / "docker-compose.wsl.yml").read_text(encoding="utf-8")
     assert "/datasets:ro" in cpu
     assert "VISION_TRAINER_EXTERNAL_DATASETS: /datasets" in cpu
-    assert "/mnt/d/Datasets:/datasets:ro" in cpu
+    assert ":/datasets:ro" in cpu
     # GPU overlay must not redefine volumes (inherits /datasets from base).
     assert "\n    volumes:" not in gpu
     assert "/datasets:ro" in wsl

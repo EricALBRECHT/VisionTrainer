@@ -27,6 +27,11 @@ from vision_trainer.pipeline.store import (
 )
 from vision_trainer.ui.device_selector import render_device_selector
 
+from views.partials.inference_display import (
+    render_inference_display_size_selector,
+    show_inference_preview,
+)
+
 
 def render() -> None:
     st.subheader("Inférence pipeline")
@@ -109,6 +114,7 @@ def render() -> None:
     show_seg_details = st.checkbox("Détails segmentation (labels masks)", value=False)
     mask_opacity = st.slider("Opacité du masque", 0.05, 0.90, 0.40, 0.05)
     show_crops = st.checkbox("Afficher les crops analysés", value=False)
+    display_fraction = render_inference_display_size_selector(key="pipeline_infer_display_size")
 
     uploaded = st.file_uploader(
         "Image",
@@ -119,6 +125,11 @@ def render() -> None:
 
     image = Image.open(uploaded).convert("RGB")
     st.caption(f"Fichier : {display_upload_name(uploaded.name)} — {image.width}×{image.height} px")
+    show_inference_preview(
+        image,
+        display_fraction=display_fraction,
+        caption=display_upload_name(uploaded.name),
+    )
 
     if st.button("Lancer le pipeline", type="primary"):
         with st.spinner("Inférence pipeline…"):
@@ -160,7 +171,11 @@ def render() -> None:
             mask_opacity=float(mask_opacity),
             scale=scale_keys[scale_label],
         )
-        st.image(annotated, caption="Résultat enrichi", use_container_width=True)
+        show_inference_preview(
+            annotated,
+            display_fraction=display_fraction,
+            caption="Résultat enrichi",
+        )
         st.download_button(
             "Télécharger l'image annotée",
             data=annotated_image_to_jpeg_bytes(annotated),
@@ -210,7 +225,11 @@ def render() -> None:
                 crop = image.crop((left, top, right, bottom))
                 cols = st.columns([1, 2])
                 with cols[0]:
-                    st.image(crop, caption=f"Crop #{index + 1}", use_container_width=True)
+                    show_inference_preview(
+                        crop,
+                        display_fraction=display_fraction,
+                        caption=f"Crop #{index + 1}",
+                    )
                 with cols[1]:
                     det = item.detection
                     st.markdown(

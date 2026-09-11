@@ -33,6 +33,7 @@ from vision_trainer.training.trainer import (
     start_training_subprocess,
 )
 from vision_trainer.ui.device_selector import render_device_selector
+from views.partials.train_log_display import show_training_log
 
 
 def render() -> None:
@@ -96,7 +97,7 @@ def render() -> None:
             st.write(f"- Temps écoulé : {_format_duration(status.started_at, status.finished_at)}")
             log_tail = read_log_tail(run_dir, max_lines=50)
             st.markdown("#### Journal (dernières lignes)")
-            st.code(log_tail or "(journal encore vide)", language="text")
+            show_training_log(log_tail)
 
         elif status.state == "completed":
             st.success("✓ Entraînement terminé")
@@ -115,7 +116,7 @@ def render() -> None:
             log_tail = read_log_tail(run_dir, max_lines=50)
             if log_tail:
                 st.markdown("#### Journal")
-                st.code(log_tail, language="text")
+                show_training_log(log_tail)
 
         elif status.state == "interrupted":
             st.warning("Entraînement interrompu")

@@ -50,6 +50,7 @@ def process_video(
     preview_every: int = 10,
     collect_frame_details: bool = False,
     cancel_check: CancelCheck | None = None,
+    tracking_summary: dict[str, Any] | None = None,
 ) -> VideoJobSummary:
     """
     Process a video file frame-by-frame.
@@ -97,6 +98,12 @@ def process_video(
     total_segmentations = 0
     secondary_errors = 0
     warnings: list[str] = []
+    if tracking_summary and tracking_summary.get("enabled"):
+        from vision_trainer.tracking.geometry import frame_stride_tracking_warning
+
+        stride_warning = frame_stride_tracking_warning(stride)
+        if stride_warning:
+            warnings.append(stride_warning)
     timings = FrameTimingsAgg()
     frame_details: list[dict[str, Any]] = []
     started = time.perf_counter()
@@ -275,6 +282,7 @@ def process_video(
         timings=timings,
         frame_details=frame_details,
         audio_preserved=False,
+        tracking=tracking_summary,
     )
 
 

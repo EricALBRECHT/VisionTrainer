@@ -44,6 +44,15 @@ _SCALE_FACTORS: dict[str, float] = {
 # Inference still runs on the original; only the visualization is resized.
 DISPLAY_MAX_WIDTH = 1280
 
+# Inference UI: visual-only scale relative to DISPLAY_MAX_WIDTH (not model input).
+INFERENCE_DISPLAY_SIZE_CHOICES: tuple[tuple[str, float], ...] = (
+    ("25 %", 0.25),
+    ("50 %", 0.50),
+    ("75 %", 0.75),
+    ("100 %", 1.00),
+)
+DEFAULT_INFERENCE_DISPLAY_FRACTION = 0.50
+
 # Target Auto sizes when the display canvas is ~1200 px wide.
 _AUTO_FONT_AT_1200 = 22
 _AUTO_LINE_AT_1200 = 3
@@ -160,6 +169,44 @@ def prepare_display_image(
         Image.Resampling.LANCZOS,
     )
     return resized, transform
+
+
+def inference_display_max_width(
+    fraction: float,
+    *,
+    base_max_width: int = DISPLAY_MAX_WIDTH,
+) -> int:
+    """
+    Max width for Streamlit previews = ``fraction × base_max_width``.
+
+    ``fraction=1.0`` preserves the existing ``DISPLAY_MAX_WIDTH`` cap (4K-safe).
+    Never used as the model input size.
+    """
+    try:
+        value = float(fraction)
+    except (TypeError, ValueError):
+        value = DEFAULT_INFERENCE_DISPLAY_FRACTION
+    value = min(1.0, max(0.05, value))
+    return max(1, int(round(int(base_max_width) * value)))
+
+
+def preview_image_for_ui(
+    image: Image.Image,
+    *,
+    display_fraction: float = DEFAULT_INFERENCE_DISPLAY_FRACTION,
+    base_max_width: int = DISPLAY_MAX_WIDTH,
+) -> Image.Image:
+    """
+    Visual-only resize for Streamlit.
+
+    Does **not** mutate ``image`` and must not be fed to YOLO / classifiers.
+    """
+    max_width = inference_display_max_width(
+        display_fraction,
+        base_max_width=base_max_width,
+    )
+    preview, _transform = prepare_display_image(image, max_width=max_width)
+    return preview
 
 
 def compute_annotation_style(
