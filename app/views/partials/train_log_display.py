@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import streamlit as st
 import streamlit.components.v1 as components
 
 from vision_trainer.training.log_display import (
     DEFAULT_EMPTY_LOG_PLACEHOLDER,
+    DEFAULT_TRAINING_LOG_STORAGE_KEY,
     TRAINING_LOG_DISPLAY_HEIGHT_PX,
+    build_training_log_html,
     training_log_body,
 )
 
@@ -17,42 +18,19 @@ def show_training_log(
     *,
     empty_placeholder: str = DEFAULT_EMPTY_LOG_PLACEHOLDER,
     auto_scroll: bool = True,
+    storage_key: str = DEFAULT_TRAINING_LOG_STORAGE_KEY,
 ) -> None:
-    """Show the training log in a compact scrollable ``st.code`` panel (~280 px).
+    """Show the training log in a compact HTML panel (~280 px) with bottom auto-scroll.
 
-    Does not alter log capture or content — presentation only.
-    When ``auto_scroll`` is True, attempts to scroll to the latest lines after render.
+    Uses ``components.html`` instead of ``st.code`` so each Streamlit rerun can
+    re-apply ``scrollTop = scrollHeight`` inside the iframe. Log capture is untouched.
     """
     body = training_log_body(log_text, empty_placeholder=empty_placeholder)
-    st.code(body, language="text", height=TRAINING_LOG_DISPLAY_HEIGHT_PX)
-    if auto_scroll:
-        _scroll_training_log_to_bottom()
-
-
-def _scroll_training_log_to_bottom() -> None:
-    """Best-effort scroll of the last ``st.code`` block to the newest lines."""
-    components.html(
-        """
-        <script>
-        (function () {
-          const roots = [];
-          try { roots.push(window.parent.document); } catch (e) {}
-          roots.push(document);
-          for (const doc of roots) {
-            const blocks = doc.querySelectorAll('[data-testid="stCode"]');
-            if (!blocks.length) continue;
-            const el = blocks[blocks.length - 1];
-            const targets = [
-              el.querySelector('[data-testid="stCodeScrollableContainer"]'),
-              el.querySelector("pre"),
-              el,
-            ].filter(Boolean);
-            for (const node of targets) {
-              node.scrollTop = node.scrollHeight;
-            }
-          }
-        })();
-        </script>
-        """,
-        height=0,
+    html_doc = build_training_log_html(
+        body,
+        height_px=TRAINING_LOG_DISPLAY_HEIGHT_PX,
+        auto_scroll=auto_scroll,
+        storage_key=storage_key,
     )
+    # iframe height matches the panel; scrolling happens inside #training-log.
+    components.html(html_doc, height=TRAINING_LOG_DISPLAY_HEIGHT_PX, scrolling=False)

@@ -452,3 +452,33 @@ def test_training_log_body_preserves_full_text() -> None:
     assert training_log_body(long_log) == long_log
     assert training_log_body(None) == DEFAULT_EMPTY_LOG_PLACEHOLDER
     assert training_log_body("") == DEFAULT_EMPTY_LOG_PLACEHOLDER
+
+
+def test_escape_training_log_html_neutralizes_markup() -> None:
+    from vision_trainer.training.log_display import escape_training_log_html
+
+    raw = '<script>alert("x")</script> & <b>bold</b>'
+    escaped = escape_training_log_html(raw)
+    assert "<script>" not in escaped
+    assert "<b>" not in escaped
+    assert "&lt;script&gt;" in escaped
+    assert "&amp;" in escaped
+
+
+def test_build_training_log_html_auto_scrolls_and_escapes() -> None:
+    from vision_trainer.training.log_display import (
+        TRAINING_LOG_DISPLAY_HEIGHT_PX,
+        build_training_log_html,
+    )
+
+    html_doc = build_training_log_html(
+        'epoch 1\n<script>evil()</script>\nepoch 2',
+        height_px=TRAINING_LOG_DISPLAY_HEIGHT_PX,
+        auto_scroll=True,
+    )
+    assert 'id="training-log"' in html_doc
+    assert f"height: {TRAINING_LOG_DISPLAY_HEIGHT_PX}px" in html_doc
+    assert "overflow-y: auto" in html_doc
+    assert "el.scrollTop = el.scrollHeight" in html_doc
+    assert "<script>evil()</script>" not in html_doc
+    assert "&lt;script&gt;evil()&lt;/script&gt;" in html_doc
