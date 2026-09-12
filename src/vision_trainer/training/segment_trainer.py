@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from vision_trainer.analysis.environment import (
+    DEFAULT_ULTRALYTICS_SEED,
+    collect_training_environment,
+    resolve_device_display_name,
+)
 from vision_trainer.tasks import normalize_task
 from vision_trainer.training.data_yaml import write_resolved_data_yaml
 from vision_trainer.training.device import DeviceChoice, DeviceError, describe_device, resolve_device
@@ -120,6 +125,11 @@ def prepare_segment_training_run(request: SegmentTrainingRequest) -> PreparedSeg
             device=device,
             progress_percent=0.0,
             task="segment",
+            device_name=resolve_device_display_name(device) or (
+                "CPU" if str(device).lower() == "cpu" else None
+            ),
+            seed=DEFAULT_ULTRALYTICS_SEED,
+            environment=collect_training_environment(),
         )
         write_status(run_dir, status)
 
@@ -142,6 +152,9 @@ def prepare_segment_training_run(request: SegmentTrainingRequest) -> PreparedSeg
             "imgsz": int(request.imgsz),
             "batch": int(request.batch),
             "device": device,
+            "device_name": status.device_name,
+            "seed": DEFAULT_ULTRALYTICS_SEED,
+            "environment": status.environment,
             "data_yaml": str(resolved_yaml.resolve()),
             "run_dir": str(run_dir.resolve()),
             "dataset_root": str(request.dataset.root.resolve()),
@@ -149,13 +162,12 @@ def prepare_segment_training_run(request: SegmentTrainingRequest) -> PreparedSeg
             "class_names": {
                 str(k): v for k, v in request.dataset.class_names.items()
             },
+            "dataset_name": request.dataset_name or request.dataset.root.name,
         }
         if request.dataset_id:
             request_payload["dataset_id"] = request.dataset_id
         if request.dataset_source_type:
             request_payload["dataset_source_type"] = request.dataset_source_type
-        if request.dataset_name:
-            request_payload["dataset_name"] = request.dataset_name
         write_request(run_dir, request_payload)
 
         return PreparedSegmentRun(

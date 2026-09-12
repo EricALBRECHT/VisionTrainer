@@ -13,9 +13,15 @@ from vision_trainer.results.catalog import (
 )
 from vision_trainer.results.models import SESSION_INFERENCE_WEIGHTS_KEY
 from vision_trainer.tasks import task_label_fr
+from vision_trainer.training.export_weights import find_export_weights
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 
 from navigation import PAGE_INFERENCE
+
+
+def _export_filename(run_dir: Path) -> str:
+    export = find_export_weights(run_dir)
+    return export.name if export is not None else "—"
 
 
 def render(*, embedded: bool = False) -> None:
@@ -83,6 +89,9 @@ def render(*, embedded: bool = False) -> None:
                     "device": format_optional(item.device),
                     "classes": format_optional(item.num_classes),
                     "best.pt": "oui" if item.has_best else "non",
+                    "export": (
+                        _export_filename(item.run_dir) if item.has_best else "—"
+                    ),
                 }
                 for item in runs
             ],
@@ -138,23 +147,44 @@ def render(*, embedded: bool = False) -> None:
 
     with col_weights:
         st.markdown("#### Modèles")
-        st.write(f"- best.pt : `{detail.best_pt if detail.best_pt else 'Non disponible'}`")
+        preferred = detail.export_pt or detail.best_pt
+        if detail.export_pt is not None:
+            st.write(f"- Modèle : `{detail.export_pt.name}`")
+            st.caption(f"`{detail.export_pt}`")
+        st.write(
+            f"- best.pt (Ultralytics) : "
+            f"`{detail.best_pt if detail.best_pt else 'Non disponible'}`"
+        )
         st.write(f"- last.pt : `{detail.last_pt if detail.last_pt else 'Non disponible'}`")
+        if preferred is not None and preferred.is_file():
+            st.download_button(
+                label=f"Télécharger {preferred.name}",
+                data=preferred.read_bytes(),
+                file_name=preferred.name,
+                mime="application/octet-stream",
+                key=f"download_weights_{summary.run_id}",
+            )
 
     if detail.best_pt is not None and summary.state in {"terminé", "completed", "interrupted"}:
-        if st.button("Utiliser ce modèle pour l'inférence", type="primary"):
-            st.session_state[SESSION_INFERENCE_WEIGHTS_KEY] = str(detail.best_pt.resolve())
-            try:
-                st.session_state["hub_infer_task"] = {
-                    "detect": "Détection",
-                    "classify": "Classification",
-                    "segment": "Segmentation",
-                }.get(summary.task, "Détection")
-                st.switch_page(PAGE_INFERENCE)
-            except Exception:  # noqa: BLE001 - older Streamlit fallback
-                st.success(
-                    "Modèle sélectionné pour l'inférence. Ouvrez la rubrique **Inférence**."
-                )
+        col_inf, col_an = st.columns(2)
+        with col_inf:
+            if st.button("Utiliser ce modèle pour l'inférence", type="primary"):
+                st.session_state[SESSION_INFERENCE_WEIGHTS_KEY] = str(detail.best_pt.resolve())
+                try:
+                    st.session_state["hub_infer_task"] = {
+                        "detect": "Détection",
+                        "classify": "Classification",
+                        "segment": "Segmentation",
+                    }.get(summary.task, "Détection")
+                    st.switch_page(PAGE_INFERENCE)
+                except Exception:  # noqa: BLE001 - older Streamlit fallback
+                    st.success(
+                        "Modèle sélectionné pour l'inférence. Ouvrez la rubrique **Inférence**."
+                    )
+        with col_an:
+            if st.button("Analyser ce run", key=f"goto_analysis_{summary.run_id}"):
+                st.session_state["analysis_preferred_run_id"] = summary.run_id
+                st.info("Ouvrez l'onglet **Analyse** pour voir le détail.")
 
     history = load_metrics_history(summary.run_dir)
     if summary.task == "classify":

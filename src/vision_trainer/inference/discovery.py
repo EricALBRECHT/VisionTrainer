@@ -4,6 +4,7 @@ from pathlib import Path
 
 from vision_trainer.inference.models import AvailableModel
 from vision_trainer.tasks import TaskType, normalize_task
+from vision_trainer.training.export_weights import find_export_weights
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 from vision_trainer.training.status import read_request_safe, read_status
 
@@ -18,6 +19,9 @@ def discover_trained_models(
 
     When ``task`` is set, only runs matching that task are returned. Legacy runs
     without a ``task`` field are treated as ``detect``.
+
+    ``weights_path`` remains the canonical ``best.pt``. The label prefers the
+    named export file when present.
     """
     root = runs_root if runs_root is not None else ARTIFACTS_RUNS_DIR
     if not root.is_dir():
@@ -44,11 +48,17 @@ def discover_trained_models(
             if run_task == "detect"
             else run_task
         )
+        status = read_status(child)
+        export = find_export_weights(
+            child,
+            export_model_path=status.export_model_path if status else None,
+        )
+        display_name = export.name if export is not None else "best.pt"
         models.append(
             AvailableModel(
                 run_id=run_id,
                 weights_path=str(best.resolve()),
-                label=f"{run_id} [{task_tag}] — best.pt",
+                label=f"{run_id} [{task_tag}] — {display_name}",
             )
         )
     return models

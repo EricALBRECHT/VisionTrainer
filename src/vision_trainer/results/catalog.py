@@ -15,6 +15,7 @@ from vision_trainer.results.models import (
     RunSummary,
 )
 from vision_trainer.tasks import normalize_task
+from vision_trainer.training.export_weights import find_export_weights
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR
 from vision_trainer.training.status import request_path, status_path
 
@@ -81,6 +82,13 @@ def load_run(run_dir: Path) -> RunDetail:
 
     best = run_dir / "weights" / "best.pt"
     last = run_dir / "weights" / "last.pt"
+    export_hint = None
+    if status_data is not None:
+        export_hint = status_data.get("export_model_path")
+    export_pt = find_export_weights(
+        run_dir,
+        export_model_path=str(export_hint) if export_hint else None,
+    )
     plots = {
         name: path
         for name in ULTRALYTICS_PLOT_FILES
@@ -102,6 +110,7 @@ def load_run(run_dir: Path) -> RunDetail:
         mask_map50_95=mask_map50_95,
         best_pt=best if best.is_file() else None,
         last_pt=last if last.is_file() else None,
+        export_pt=export_pt,
         plots=plots,
         error_message=error_message,
         data_yaml=data_yaml if data_yaml.is_file() else None,

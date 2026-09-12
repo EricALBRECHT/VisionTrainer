@@ -407,6 +407,11 @@ def test_execute_training_updates_progress_and_metrics(
     assert final_status.epoch_current == 3
     assert final_status.best_model_path is not None
     assert final_status.last_model_path is not None
+    assert final_status.export_model_path is not None
+    export_path = Path(final_status.export_model_path)
+    assert export_path.is_file()
+    assert export_path.name.endswith("_detect_best.pt")
+    assert export_path.read_bytes() == (prepared.run_dir / "weights" / "best.pt").read_bytes()
     assert final_status.metrics.map50 == 0.77
     assert final_status.metrics.map50_95 == 0.55
 

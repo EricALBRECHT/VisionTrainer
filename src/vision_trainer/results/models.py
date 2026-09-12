@@ -62,6 +62,7 @@ class RunDetail:
     mask_map50_95: float | None = None
     best_pt: Path | None = None
     last_pt: Path | None = None
+    export_pt: Path | None = None
     plots: dict[str, Path] = field(default_factory=dict)
     error_message: str | None = None
     data_yaml: Path | None = None

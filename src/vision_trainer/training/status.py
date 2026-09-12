@@ -66,10 +66,15 @@ class RunStatus:
     progress_percent: float = 0.0
     best_model_path: str | None = None
     last_model_path: str | None = None
+    export_model_path: str | None = None
     error_message: str | None = None
     pid: int | None = None
     metrics: RunMetrics = field(default_factory=RunMetrics)
     task: TaskType = DEFAULT_TASK
+    # Optional metadata for newer runs (legacy runs omit these).
+    device_name: str | None = None
+    seed: int | None = None
+    environment: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -104,10 +109,16 @@ class RunStatus:
             progress_percent=float(data.get("progress_percent") or 0.0),
             best_model_path=data.get("best_model_path"),
             last_model_path=data.get("last_model_path"),
+            export_model_path=data.get("export_model_path"),
             error_message=data.get("error_message"),
             pid=int(data["pid"]) if data.get("pid") is not None else None,
             metrics=metrics,
             task=normalize_task(data.get("task")),
+            device_name=data.get("device_name"),
+            seed=int(data["seed"]) if data.get("seed") is not None else None,
+            environment=dict(data.get("environment") or {})
+            if isinstance(data.get("environment"), dict)
+            else {},
         )
 
 

@@ -118,7 +118,15 @@ def render() -> None:
         elif status.state == "completed":
             st.success("✓ Entraînement terminé")
             st.write(f"- Durée totale : {_format_duration(status.started_at, status.finished_at)}")
-            st.write(f"- best.pt : `{status.best_model_path or 'non trouvé'}`")
+            export_name = (
+                Path(status.export_model_path).name
+                if status.export_model_path
+                else None
+            )
+            if export_name:
+                st.write(f"- Modèle export : `{export_name}`")
+                st.caption(f"Chemin : `{status.export_model_path}`")
+            st.write(f"- best.pt (Ultralytics) : `{status.best_model_path or 'non trouvé'}`")
             st.write(f"- last.pt : `{status.last_model_path or 'non trouvé'}`")
             st.markdown("**Métriques Box**")
             st.write(f"- Precision : {_format_metric(status.metrics.precision)}")

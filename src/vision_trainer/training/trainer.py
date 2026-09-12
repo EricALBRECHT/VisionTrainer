@@ -5,8 +5,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from vision_trainer.analysis.environment import (
+    DEFAULT_ULTRALYTICS_SEED,
+    collect_training_environment,
+    resolve_device_display_name,
+)
 from vision_trainer.training.data_yaml import write_resolved_data_yaml
 from vision_trainer.training.device import DeviceChoice, DeviceError, cuda_oom_user_message, describe_device, resolve_device
+from vision_trainer.training.export_weights import (
+    export_named_best_weights,
+    resolve_export_dataset_name,
+)
 from vision_trainer.training.runs import ARTIFACTS_RUNS_DIR, create_run_directory
 from vision_trainer.training.status import (
     TERMINAL_STATES,
@@ -116,6 +125,7 @@ def build_train_kwargs(
         "exist_ok": True,
         "plots": True,
         "verbose": True,
+        "seed": DEFAULT_ULTRALYTICS_SEED,
     }
 
 
@@ -183,6 +193,11 @@ def prepare_training_run(request: TrainingRequest) -> PreparedRun:
             device=device,
             progress_percent=0.0,
             task="detect",
+            device_name=resolve_device_display_name(device) or (
+                "CPU" if str(device).lower() == "cpu" else None
+            ),
+            seed=DEFAULT_ULTRALYTICS_SEED,
+            environment=collect_training_environment(),
         )
         write_status(run_dir, status)
 
@@ -195,16 +210,18 @@ def prepare_training_run(request: TrainingRequest) -> PreparedRun:
             "imgsz": int(request.imgsz),
             "batch": int(request.batch),
             "device": device,
+            "device_name": status.device_name,
+            "seed": DEFAULT_ULTRALYTICS_SEED,
+            "environment": status.environment,
             "data_yaml": str(resolved_yaml.resolve()),
             "run_dir": str(run_dir.resolve()),
             "dataset_root": str(request.dataset.root.resolve()),
+            "dataset_name": request.dataset_name or request.dataset.root.name,
         }
         if request.dataset_id:
             request_payload["dataset_id"] = request.dataset_id
         if request.dataset_source_type:
             request_payload["dataset_source_type"] = request.dataset_source_type
-        if request.dataset_name:
-            request_payload["dataset_name"] = request.dataset_name
         write_request(run_dir, request_payload)
 
         return PreparedRun(
@@ -386,6 +403,14 @@ def execute_training_from_run_dir(
     status.best_model_path = str(best)
     status.last_model_path = str(last) if last else None
     status.error_message = None
+    dataset_label = resolve_export_dataset_name(request)
+    export_path = export_named_best_weights(
+        run_dir,
+        dataset_name=dataset_label,
+        task=task,
+        best_path=best,
+    )
+    status.export_model_path = str(export_path) if export_path else None
     write_status(run_dir, status)
     return status
 
